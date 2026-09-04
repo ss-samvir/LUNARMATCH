@@ -2643,7 +2643,7 @@
 
             resetResults();
 
-            initializeSystem();
+// OpenCV loads only when analysis starts.
         }
     );
 
