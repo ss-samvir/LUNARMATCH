@@ -1,4 +1,3 @@
-```javascript
 (() => {
   "use strict";
 
@@ -73,6 +72,7 @@
 
   function setText(id, value) {
     const element = $(id);
+
     if (element) {
       element.textContent = value;
     }
@@ -80,6 +80,7 @@
 
   function setDisabled(id, state) {
     const element = $(id);
+
     if (element) {
       element.disabled = state;
     }
@@ -91,6 +92,7 @@
 
   function round(value, digits = 2) {
     const factor = Math.pow(10, digits);
+
     return Math.round(value * factor) / factor;
   }
 
@@ -232,6 +234,11 @@
     resetPipeline();
 
     lastAnalysis = null;
+
+    setDisabled(
+      "downloadReportBtn",
+      true
+    );
   }
 
 
@@ -521,11 +528,6 @@
         height
       );
 
-    /*
-     * Integral images allow local mean/std calculation
-     * without doing a 7x7 loop around every pixel.
-     */
-
     const integral =
       new Float64Array(
         (width + 1) *
@@ -689,10 +691,6 @@
           );
       }
     }
-
-    /*
-     * Mild 5-point smoothing.
-     */
 
     const smooth =
       new Float32Array(
@@ -1140,7 +1138,9 @@
           sxy * sxy;
 
         const trace =
-          sxx + syy + 1e-6;
+          sxx +
+          syy +
+          1e-6;
 
         const response =
           determinant / trace;
@@ -1160,10 +1160,6 @@
       (a, b) =>
         b.score - a.score
     );
-
-    /*
-     * Spatial non-maximum suppression.
-     */
 
     const selected = [];
 
@@ -1242,10 +1238,6 @@
     ) {
       return null;
     }
-
-    /*
-     * Estimate local dominant gradient direction.
-     */
 
     let directionX = 0;
     let directionY = 0;
@@ -1328,10 +1320,6 @@
       }
     }
 
-    /*
-     * Zero mean.
-     */
-
     let mean = 0;
 
     for (
@@ -1351,10 +1339,6 @@
 
       descriptor[i] -= mean;
     }
-
-    /*
-     * L2 normalization.
-     */
 
     let norm = 0;
 
@@ -1487,10 +1471,6 @@
 
     const forward = [];
 
-    /*
-     * A → B.
-     */
-
     for (
       let i = 0;
       i < A.length;
@@ -1550,10 +1530,6 @@
       }
     }
 
-    /*
-     * B → A.
-     */
-
     const reverse =
       new Map();
 
@@ -1609,11 +1585,6 @@
           ) === match.ai
       );
 
-    /*
-     * Return references to original
-     * feature arrays.
-     */
-
     return mutual.map(
       match => ({
         ai:
@@ -1663,7 +1634,6 @@
       q2.y,
       q3.y
     ];
-
 
     function gaussian(
       source,
@@ -1940,10 +1910,6 @@
 
       const q3 =
         featuresB[m3.bi];
-
-      /*
-       * Reject degenerate triangles.
-       */
 
       if (
         triangleArea(
@@ -2586,10 +2552,6 @@
       }
     );
 
-    /*
-     * Labels.
-     */
-
     context.fillStyle =
       "rgba(0,0,0,.65)";
 
@@ -2680,11 +2642,6 @@
       )
     );
 
-
-    /*
-     * IMAGE A.
-     */
-
     setText(
       "resolutionA",
       result.metricsA.resolution
@@ -2710,11 +2667,6 @@
       `${result.metricsA.qualityScore}/100`
     );
 
-
-    /*
-     * IMAGE B.
-     */
-
     setText(
       "resolutionB",
       result.metricsB.resolution
@@ -2739,11 +2691,6 @@
       "qualityScoreB",
       `${result.metricsB.qualityScore}/100`
     );
-
-
-    /*
-     * CORRESPONDENCE.
-     */
 
     setText(
       "rawMatches",
@@ -2790,11 +2737,6 @@
       result.verificationStatus
     );
 
-
-    /*
-     * VISUALIZATION.
-     */
-
     const map =
       $("correspondenceMap");
 
@@ -2818,12 +2760,16 @@
         "none";
     }
 
-
     setText(
       "interpretation",
       buildInterpretation(
         result
       )
+    );
+
+    setDisabled(
+      "downloadReportBtn",
+      false
     );
   }
 
@@ -2859,11 +2805,6 @@
 
       resetPipeline();
 
-
-      /* --------------------------------------------------------
-         ACQUIRE
-         -------------------------------------------------------- */
-
       pipelineActive(
         "stageAcquire"
       );
@@ -2893,11 +2834,6 @@
         "stageAcquire"
       );
 
-
-      /* --------------------------------------------------------
-         PREPROCESS
-         -------------------------------------------------------- */
-
       pipelineActive(
         "stagePreprocess"
       );
@@ -2922,11 +2858,6 @@
       pipelineComplete(
         "stagePreprocess"
       );
-
-
-      /* --------------------------------------------------------
-         FEATURE EXTRACTION
-         -------------------------------------------------------- */
 
       pipelineActive(
         "stageExtract"
@@ -2955,11 +2886,6 @@
         "stageExtract"
       );
 
-
-      /* --------------------------------------------------------
-         MATCH
-         -------------------------------------------------------- */
-
       pipelineActive(
         "stageMatch"
       );
@@ -2980,11 +2906,6 @@
       pipelineComplete(
         "stageMatch"
       );
-
-
-      /* --------------------------------------------------------
-         GEOMETRIC VERIFICATION
-         -------------------------------------------------------- */
 
       pipelineActive(
         "stageVerify"
@@ -3007,11 +2928,6 @@
       pipelineComplete(
         "stageVerify"
       );
-
-
-      /* --------------------------------------------------------
-         SCORE
-         -------------------------------------------------------- */
 
       pipelineActive(
         "stageScore"
@@ -3049,11 +2965,6 @@
       pipelineComplete(
         "stageScore"
       );
-
-
-      /* --------------------------------------------------------
-         REPORT / VISUALIZATION
-         -------------------------------------------------------- */
 
       pipelineActive(
         "stageReport"
@@ -3318,9 +3229,6 @@
 
       let y = 18;
 
-
-      /* Header */
-
       documentPDF.setFont(
         "helvetica",
         "bold"
@@ -3355,9 +3263,6 @@
 
       y += 10;
 
-
-      /* Core statistics */
-
       documentPDF.setFontSize(
         10
       );
@@ -3387,7 +3292,6 @@
         `Processing Time: ${formatTime(lastAnalysis.processingMs)}`
       ];
 
-
       for (
         const line of statistics
       ) {
@@ -3400,9 +3304,6 @@
 
         y += 6;
       }
-
-
-      /* Interpretation */
 
       y += 4;
 
@@ -3445,9 +3346,6 @@
         wrapped.length *
         5 +
         7;
-
-
-      /* Correspondence map */
 
       if (
         lastAnalysis.visualization
@@ -3492,9 +3390,6 @@
         );
       }
 
-
-      /* Footer */
-
       documentPDF.setFontSize(
         7
       );
@@ -3508,9 +3403,6 @@
         margin,
         288
       );
-
-
-      /* Download */
 
       documentPDF.save(
         "LUNARMATCH_Analysis_Report.pdf"
@@ -3561,13 +3453,26 @@
     const image =
       $(previewId);
 
-    if (!image) return;
+    if (!image) {
+      console.warn(
+        `LUNARMATCH: Preview element ${previewId} not found.`
+      );
+      return;
+    }
 
     image.src =
       dataURL;
 
     image.style.display =
       "block";
+
+    image.removeAttribute(
+      "hidden"
+    );
+
+    console.log(
+      `LUNARMATCH: Preview updated for ${previewId}`
+    );
   }
 
 
@@ -3585,6 +3490,11 @@
 
       validateFile(
         file
+      );
+
+      setText(
+        "status",
+        `LOADING IMAGE ${slot}`
       );
 
       const dataURL =
@@ -3634,7 +3544,17 @@
         );
       }
 
+      console.log(
+        `LUNARMATCH: Image ${slot} loaded successfully:`,
+        file.name
+      );
+
     } catch (error) {
+
+      console.error(
+        `LUNARMATCH: Image ${slot} error:`,
+        error
+      );
 
       setText(
         "status",
@@ -3649,6 +3569,10 @@
   }
 
 
+  /* ============================================================
+     ROBUST FILE INPUT SETUP
+     ============================================================ */
+
   function setupImageInput(
     inputId,
     previewId,
@@ -3658,31 +3582,78 @@
     const input =
       $(inputId);
 
-    if (!input) return;
+    if (!input) {
+
+      console.error(
+        `LUNARMATCH: ${inputId} not found.`
+      );
+
+      return;
+    }
+
+    /*
+     * Force the correct input type.
+     */
+
+    input.type =
+      "file";
+
+    /*
+     * Explicitly allow common lunar image formats.
+     */
+
+    input.accept =
+      "image/jpeg,image/png,image/webp,image/bmp,image/tiff,.jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff";
+
+    /*
+     * Handle normal file selection.
+     */
 
     input.addEventListener(
       "change",
       async event => {
 
-        const file =
-          event.target
-            .files?.[0];
+        const files =
+          event.target.files;
 
-        if (file) {
+        if (
+          !files ||
+          !files.length
+        ) {
 
-          await handleImage(
-            file,
-            slot,
-            previewId
+          console.log(
+            `LUNARMATCH: No Image ${slot} selected.`
           );
+
+          return;
         }
+
+        const file =
+          files[0];
+
+        console.log(
+          `LUNARMATCH: Image ${slot} selected:`,
+          file.name,
+          file.type,
+          file.size
+        );
+
+        await handleImage(
+          file,
+          slot,
+          previewId
+        );
       }
+    );
+
+    console.log(
+      `LUNARMATCH: File input ${inputId} initialized.`
     );
   }
 
 
   /* ============================================================
-     DRAG & DROP
+     DRAG & DROP + CLICKABLE UPLOAD ZONE
      ============================================================ */
 
   function setupDropZone(
@@ -3696,8 +3667,45 @@
       !zone ||
       !input
     ) {
+
+      console.warn(
+        `LUNARMATCH: Drop zone or input missing for Image ${slot}.`
+      );
+
       return;
     }
+
+    /*
+     * Make the entire upload card clickable.
+     */
+
+    zone.addEventListener(
+      "click",
+      event => {
+
+        /*
+         * If the actual file input itself was clicked,
+         * don't trigger another click.
+         */
+
+        if (
+          event.target === input
+        ) {
+          return;
+        }
+
+        console.log(
+          `LUNARMATCH: Opening Image ${slot} file picker.`
+        );
+
+        input.click();
+      }
+    );
+
+
+    /*
+     * Drag enter / drag over.
+     */
 
     [
       "dragenter",
@@ -3722,6 +3730,10 @@
     );
 
 
+    /*
+     * Drag leave / drop.
+     */
+
     [
       "dragleave",
       "drop"
@@ -3745,23 +3757,46 @@
     );
 
 
+    /*
+     * Handle dropped image.
+     */
+
     zone.addEventListener(
       "drop",
       async event => {
 
-        const file =
-          event.dataTransfer
-            ?.files?.[0];
+        const files =
+          event.dataTransfer?.files;
 
-        if (file) {
+        if (
+          !files ||
+          !files.length
+        ) {
 
-          await handleImage(
-            file,
-            slot,
-            previewId
-          );
+          return;
         }
+
+        const file =
+          files[0];
+
+        console.log(
+          `LUNARMATCH: Image ${slot} dropped:`,
+          file.name,
+          file.type,
+          file.size
+        );
+
+        await handleImage(
+          file,
+          slot,
+          previewId
+        );
       }
+    );
+
+
+    console.log(
+      `LUNARMATCH: Upload zone for Image ${slot} initialized.`
     );
   }
 
@@ -3910,11 +3945,25 @@
     "DOMContentLoaded",
     () => {
 
+      console.log(
+        "LUNARMATCH: DOM loaded."
+      );
+
+
+      /*
+       * Initialize Image A input.
+       */
+
       setupImageInput(
         "fileA",
         "previewA",
         "A"
       );
+
+
+      /*
+       * Initialize Image B input.
+       */
 
       setupImageInput(
         "fileB",
@@ -3923,17 +3972,36 @@
       );
 
 
+      /*
+       * Get actual input elements.
+       */
+
       const inputA =
         $("fileA");
 
       const inputB =
         $("fileB");
 
+
+      /*
+       * Find upload cards.
+       */
+
       const dropZones =
         document.querySelectorAll(
           ".drop-new"
         );
 
+
+      console.log(
+        "LUNARMATCH upload zones:",
+        dropZones.length
+      );
+
+
+      /*
+       * Initialize Image A upload card.
+       */
 
       setupDropZone(
         dropZones[0],
@@ -3942,6 +4010,11 @@
         "A"
       );
 
+
+      /*
+       * Initialize Image B upload card.
+       */
+
       setupDropZone(
         dropZones[1],
         inputB,
@@ -3949,6 +4022,10 @@
         "B"
       );
 
+
+      /*
+       * Compare button.
+       */
 
       const compare =
         $("compareBtn");
@@ -3959,8 +4036,18 @@
           "click",
           analyzeImages
         );
+
+      } else {
+
+        console.warn(
+          "LUNARMATCH: compareBtn not found."
+        );
       }
 
+
+      /*
+       * PDF report button.
+       */
 
       const report =
         $("downloadReportBtn");
@@ -3971,8 +4058,18 @@
           "click",
           downloadReport
         );
+
+      } else {
+
+        console.warn(
+          "LUNARMATCH: downloadReportBtn not found."
+        );
       }
 
+
+      /*
+       * Other UI systems.
+       */
 
       setupNavigation();
 
@@ -3983,6 +4080,10 @@
       resetResults();
 
 
+      /*
+       * Startup diagnostics.
+       */
+
       console.log(
         "LUNARMATCH V6 — Lunar Correspondence Engine ONLINE"
       );
@@ -3990,8 +4091,21 @@
       console.log(
         "Engine: Local normalization + feature detection + descriptor matching + RANSAC"
       );
+
+      console.log(
+        "Upload system: ACTIVE"
+      );
+
+      console.log(
+        "Image A input:",
+        !!inputA
+      );
+
+      console.log(
+        "Image B input:",
+        !!inputB
+      );
     }
   );
 
 })();
-```
