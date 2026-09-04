@@ -11,7 +11,10 @@
 
 <body>
 
-  <!-- ================= NAVIGATION ================= -->
+  <!-- =====================================================
+       TOP NAVIGATION
+  ====================================================== -->
+
   <header class="topbar">
 
     <a href="#home" class="brand">
@@ -43,8 +46,11 @@
   </header>
 
 
-  <!-- ================= HERO ================= -->
   <main>
+
+    <!-- ===================================================
+         HERO
+    ==================================================== -->
 
     <section id="home" class="hero-new">
 
@@ -64,15 +70,17 @@
         </h1>
 
         <p class="hero-description">
-          An AI-powered lunar image correspondence platform
-          designed to identify matching geological features
-          across Chandrayaan-2 surface imagery.
+          An advanced lunar image correspondence platform
+          designed to identify and verify matching geological
+          features across lunar surface imagery.
         </p>
 
         <div class="hero-actions">
 
-          <button class="primary-btn"
-            onclick="document.querySelector('#compare').scrollIntoView({behavior:'smooth'})">
+          <button
+            class="primary-btn"
+            onclick="document.querySelector('#compare').scrollIntoView({behavior:'smooth'})"
+          >
             START ANALYSIS
             <span>→</span>
           </button>
@@ -91,13 +99,13 @@
           </div>
 
           <div>
-            <strong>AI</strong>
+            <strong>CV</strong>
             <span>FEATURE ANALYSIS</span>
           </div>
 
           <div>
-            <strong>SIFT</strong>
-            <span>MATCHING ENGINE</span>
+            <strong>RANSAC</strong>
+            <span>VERIFICATION</span>
           </div>
 
         </div>
@@ -138,7 +146,9 @@
     </section>
 
 
-    <!-- ================= MISSION ================= -->
+    <!-- ===================================================
+         MISSION
+    ==================================================== -->
 
     <section id="mission" class="mission-section">
 
@@ -155,6 +165,7 @@
         </h2>
 
       </div>
+
 
       <div class="mission-grid">
 
@@ -185,7 +196,7 @@
 
           <p>
             Extract distinctive visual features using
-            computer vision algorithms.
+            advanced computer-vision techniques.
           </p>
 
         </div>
@@ -197,11 +208,11 @@
 
           <div class="card-icon">✦</div>
 
-          <h3>CORRELATE</h3>
+          <h3>VERIFY</h3>
 
           <p>
-            Match corresponding features and calculate
-            the strength of the detected correspondence.
+            Evaluate candidate correspondences using
+            reciprocal matching and geometric verification.
           </p>
 
         </div>
@@ -211,7 +222,9 @@
     </section>
 
 
-    <!-- ================= ANALYSIS ================= -->
+    <!-- ===================================================
+         ANALYSIS CONTROL CENTER
+    ==================================================== -->
 
     <section id="compare" class="analysis-section">
 
@@ -222,10 +235,13 @@
           <span class="section-tag">MISSION CONTROL</span>
         </div>
 
-        <h2>LUNAR IMAGE <span>ANALYSIS</span></h2>
+        <h2>
+          LUNAR IMAGE <span>ANALYSIS</span>
+        </h2>
 
         <p>
-          Upload two lunar images to initiate the correspondence engine.
+          Upload two lunar images to initiate the
+          correspondence analysis pipeline.
         </p>
 
       </div>
@@ -233,17 +249,21 @@
 
       <div class="analysis-console">
 
-        <!-- LEFT SIDE -->
+        <!-- =================================================
+             INPUT CONSOLE
+        ================================================== -->
 
         <div class="input-console">
 
           <div class="console-header">
+
             <div>
               <span class="live-dot"></span>
               IMAGE ACQUISITION
             </div>
 
             <span>INPUT / 02</span>
+
           </div>
 
 
@@ -271,12 +291,15 @@
                   </span>
 
                   <small>
-                    JPG · JPEG · PNG · TIF
+                    JPG · JPEG · PNG · TIF · WEBP
                   </small>
 
                 </div>
 
-                <img id="previewA" alt="Image A preview">
+                <img
+                  id="previewA"
+                  alt="Image A preview"
+                >
 
               </label>
 
@@ -312,12 +335,15 @@
                   </span>
 
                   <small>
-                    JPG · JPEG · PNG · TIF
+                    JPG · JPEG · PNG · TIF · WEBP
                   </small>
 
                 </div>
 
-                <img id="previewB" alt="Image B preview">
+                <img
+                  id="previewB"
+                  alt="Image B preview"
+                >
 
               </label>
 
@@ -346,13 +372,16 @@
 
             <span>● SECURE PROCESSING</span>
             <span>NO IMAGE STORAGE</span>
+            <span>RANSAC VERIFIED</span>
 
           </div>
 
         </div>
 
 
-        <!-- RIGHT SIDE -->
+        <!-- =================================================
+             RESULT CONSOLE
+        ================================================== -->
 
         <div class="result-console">
 
@@ -368,6 +397,8 @@
           </div>
 
 
+          <!-- MATCH OVERVIEW -->
+
           <div class="result-status">
 
             <div class="status-circle">
@@ -375,25 +406,34 @@
             </div>
 
             <div>
+
               <small>ANALYSIS STATUS</small>
 
               <strong id="status">
                 READY FOR ANALYSIS
               </strong>
+
             </div>
 
             <div class="score-display">
-              <span>MATCH</span>
-              <strong id="score">—</strong>
+
+              <span>OVERALL MATCH</span>
+
+              <strong id="score">
+                —
+              </strong>
+
             </div>
 
           </div>
 
 
+          <!-- CORE METRICS -->
+
           <div class="metrics">
 
             <div class="metric">
-              <span>FEATURES</span>
+              <span>VERIFIED FEATURES</span>
               <strong id="features">—</strong>
             </div>
 
@@ -403,7 +443,7 @@
             </div>
 
             <div class="metric">
-              <span>QUALITY</span>
+              <span>IMAGE QUALITY</span>
               <strong id="quality">—</strong>
             </div>
 
@@ -415,6 +455,270 @@
           </div>
 
 
+          <!-- =================================================
+               DETAILED ANALYSIS
+          ================================================== -->
+
+          <div class="detailed-analysis">
+
+            <div class="visual-header">
+
+              <span>
+                DETAILED CORRESPONDENCE ANALYSIS
+              </span>
+
+              <small>
+                ENGINE METRICS
+              </small>
+
+            </div>
+
+
+            <!-- IMAGE A STATS -->
+
+            <div class="analysis-group">
+
+              <div class="analysis-group-title">
+                <span>A</span>
+                SOURCE IMAGE ANALYSIS
+              </div>
+
+              <div class="analysis-grid">
+
+                <div class="analysis-stat">
+                  <span>RESOLUTION</span>
+                  <strong id="resolutionA">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>KEYPOINTS</span>
+                  <strong id="keypointsA">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>CONTRAST</span>
+                  <strong id="contrastA">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>SHARPNESS</span>
+                  <strong id="sharpnessA">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>QUALITY SCORE</span>
+                  <strong id="qualityScoreA">—</strong>
+                </div>
+
+              </div>
+
+            </div>
+
+
+            <!-- IMAGE B STATS -->
+
+            <div class="analysis-group">
+
+              <div class="analysis-group-title">
+                <span>B</span>
+                REFERENCE IMAGE ANALYSIS
+              </div>
+
+              <div class="analysis-grid">
+
+                <div class="analysis-stat">
+                  <span>RESOLUTION</span>
+                  <strong id="resolutionB">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>KEYPOINTS</span>
+                  <strong id="keypointsB">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>CONTRAST</span>
+                  <strong id="contrastB">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>SHARPNESS</span>
+                  <strong id="sharpnessB">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>QUALITY SCORE</span>
+                  <strong id="qualityScoreB">—</strong>
+                </div>
+
+              </div>
+
+            </div>
+
+
+            <!-- MATCHING STATISTICS -->
+
+            <div class="analysis-group">
+
+              <div class="analysis-group-title">
+                <span>01</span>
+                FEATURE CORRESPONDENCE
+              </div>
+
+              <div class="analysis-grid">
+
+                <div class="analysis-stat">
+                  <span>RAW MATCHES</span>
+                  <strong id="rawMatches">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>CANDIDATE MATCHES</span>
+                  <strong id="candidateMatches">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>VERIFIED MATCHES</span>
+                  <strong id="verifiedMatches">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>FEATURE COVERAGE</span>
+                  <strong id="featureCoverage">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>CORRESPONDENCE STRENGTH</span>
+                  <strong id="correspondenceStrength">—</strong>
+                </div>
+
+              </div>
+
+            </div>
+
+
+            <!-- GEOMETRIC VERIFICATION -->
+
+            <div class="analysis-group">
+
+              <div class="analysis-group-title">
+                <span>02</span>
+                GEOMETRIC VERIFICATION
+              </div>
+
+              <div class="analysis-grid">
+
+                <div class="analysis-stat">
+                  <span>INLIER RATIO</span>
+                  <strong id="inlierRatio">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>GEOMETRIC CONSISTENCY</span>
+                  <strong id="geometricConsistency">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>HOMOGRAPHY</span>
+                  <strong id="homographyStatus">—</strong>
+                </div>
+
+                <div class="analysis-stat">
+                  <span>VERIFICATION</span>
+                  <strong id="verificationStatus">—</strong>
+                </div>
+
+              </div>
+
+            </div>
+
+          </div>
+
+
+          <!-- =================================================
+               ANALYSIS PIPELINE
+          ================================================== -->
+
+          <div class="pipeline-panel">
+
+            <div class="visual-header">
+
+              <span>
+                ANALYSIS PIPELINE
+              </span>
+
+              <small>
+                PROCESS STATUS
+              </small>
+
+            </div>
+
+
+            <div class="pipeline">
+
+              <div class="pipeline-step" id="stageAcquire">
+                <span>01</span>
+                <strong>ACQUIRE</strong>
+                <small>INPUT</small>
+              </div>
+
+              <div class="pipeline-arrow">→</div>
+
+              <div class="pipeline-step" id="stagePreprocess">
+                <span>02</span>
+                <strong>PREPROCESS</strong>
+                <small>CLAHE</small>
+              </div>
+
+              <div class="pipeline-arrow">→</div>
+
+              <div class="pipeline-step" id="stageExtract">
+                <span>03</span>
+                <strong>EXTRACT</strong>
+                <small>SIFT</small>
+              </div>
+
+              <div class="pipeline-arrow">→</div>
+
+              <div class="pipeline-step" id="stageMatch">
+                <span>04</span>
+                <strong>MATCH</strong>
+                <small>FLANN</small>
+              </div>
+
+              <div class="pipeline-arrow">→</div>
+
+              <div class="pipeline-step" id="stageVerify">
+                <span>05</span>
+                <strong>VERIFY</strong>
+                <small>RANSAC</small>
+              </div>
+
+              <div class="pipeline-arrow">→</div>
+
+              <div class="pipeline-step" id="stageScore">
+                <span>06</span>
+                <strong>SCORE</strong>
+                <small>MODEL</small>
+              </div>
+
+              <div class="pipeline-arrow">→</div>
+
+              <div class="pipeline-step" id="stageReport">
+                <span>07</span>
+                <strong>REPORT</strong>
+                <small>OUTPUT</small>
+              </div>
+
+            </div>
+
+          </div>
+
+
+          <!-- =================================================
+               CORRESPONDENCE MAP
+          ================================================== -->
+
           <div class="visualization-new">
 
             <div class="visual-header">
@@ -423,8 +727,8 @@
                 FEATURE CORRESPONDENCE MAP
               </span>
 
-              <small>
-                SIFT + FLANN
+              <small id="visualEngine">
+                SIFT + FLANN + RANSAC
               </small>
 
             </div>
@@ -432,23 +736,93 @@
 
             <div class="visual-images">
 
-              <div>
-                <label>IMAGE A</label>
-                <img id="resultA" alt="Analysis result A">
-              </div>
+              <div class="correspondence-viewer">
 
-              <div>
-                <label>IMAGE B</label>
-                <img id="resultB" alt="Analysis result B">
+                <label>
+                  IMAGE A ↔ IMAGE B
+                </label>
+
+                <img
+                  id="correspondenceMap"
+                  alt="Verified lunar image correspondence map"
+                >
+
+                <div
+                  id="visualPlaceholder"
+                  class="visual-placeholder"
+                >
+                  CORRESPONDENCE VISUALIZATION<br>
+                  <small>
+                    Run the analysis engine to generate the map
+                  </small>
+                </div>
+
               </div>
 
             </div>
 
 
-            <div class="visual-note">
-              ● Corresponding keypoints are displayed
-              when returned by the analysis engine.
+            <div class="visual-note" id="visualNote">
+              ● Verified feature correspondences will appear here
+              after analysis.
             </div>
+
+          </div>
+
+
+          <!-- =================================================
+               INTERPRETATION
+          ================================================== -->
+
+          <div class="interpretation-panel">
+
+            <div class="visual-header">
+
+              <span>
+                AUTOMATED ANALYSIS INTERPRETATION
+              </span>
+
+              <small>
+                SYSTEM ASSESSMENT
+              </small>
+
+            </div>
+
+            <p id="interpretation">
+              Upload two lunar images and run the correspondence
+              engine to generate a detailed assessment.
+            </p>
+
+          </div>
+
+
+          <!-- =================================================
+               REPORT ACTION
+          ================================================== -->
+
+          <div class="report-panel">
+
+            <div>
+
+              <strong>
+                COMPLETE ANALYSIS REPORT
+              </strong>
+
+              <span>
+                Generate a professional PDF containing the
+                correspondence analysis, metrics and visualization.
+              </span>
+
+            </div>
+
+            <button
+              id="downloadReportBtn"
+              class="report-btn"
+              disabled
+            >
+              DOWNLOAD PDF REPORT
+              <span>↓</span>
+            </button>
 
           </div>
 
@@ -459,14 +833,19 @@
     </section>
 
 
-    <!-- ================= PROCESS ================= -->
+    <!-- ===================================================
+         PROCESS
+    ==================================================== -->
 
     <section id="how" class="process-section">
 
       <div class="section-intro center">
 
         <span class="section-number">03</span>
-        <span class="section-tag">THE TECHNOLOGY</span>
+
+        <span class="section-tag">
+          THE TECHNOLOGY
+        </span>
 
         <h2>
           FROM RAW IMAGE<br>
@@ -502,7 +881,8 @@
           <h3>EXTRACT</h3>
 
           <p>
-            Distinctive visual features are detected from each image.
+            Distinctive visual features are detected from
+            each image.
           </p>
 
         </div>
@@ -517,7 +897,8 @@
           <h3>MATCH</h3>
 
           <p>
-            Feature descriptors are compared to locate correspondences.
+            Feature descriptors are compared to locate
+            potential correspondences.
           </p>
 
         </div>
@@ -529,10 +910,11 @@
 
           <div class="process-icon">✓</div>
 
-          <h3>REPORT</h3>
+          <h3>VERIFY</h3>
 
           <p>
-            The system presents the resulting match and confidence.
+            Geometric consistency is evaluated using
+            robust verification.
           </p>
 
         </div>
@@ -542,7 +924,9 @@
     </section>
 
 
-    <!-- ================= ABOUT ================= -->
+    <!-- ===================================================
+         ABOUT
+    ==================================================== -->
 
     <section id="about" class="about-section">
 
@@ -552,7 +936,9 @@
 
       <div class="about-content">
 
-        <span class="section-tag">ABOUT THE PLATFORM</span>
+        <span class="section-tag">
+          ABOUT THE PLATFORM
+        </span>
 
         <h2>
           BUILT FOR<br>
@@ -560,11 +946,12 @@
         </h2>
 
         <p>
-          LUNARMATCH is a web interface for a lunar image
-          correspondence pipeline designed around Chandrayaan-2
-          imagery. The platform provides an intuitive interface
-          for comparing lunar surface images and visualizing
-          detected correspondences.
+          LUNARMATCH is a lunar image correspondence platform
+          designed around computer-vision analysis of lunar
+          surface imagery. The system combines feature
+          extraction, descriptor matching and geometric
+          verification to identify measurable visual
+          correspondences between two observations.
         </p>
 
         <div class="mission-tags">
@@ -572,9 +959,61 @@
           <span>CHANDRAYAAN-2</span>
           <span>ISRO</span>
           <span>COMPUTER VISION</span>
-          <span>AI / ML</span>
+          <span>SIFT</span>
+          <span>FLANN</span>
+          <span>RANSAC</span>
 
         </div>
+
+      </div>
+
+    </section>
+
+
+    <!-- ===================================================
+         CONTACT / REGISTRATION PLACEHOLDER
+         Will be expanded in a later step.
+    ==================================================== -->
+
+    <section id="contact" class="contact-section">
+
+      <div class="section-intro center">
+
+        <span class="section-number">05</span>
+
+        <span class="section-tag">
+          PLATFORM ACCESS
+        </span>
+
+        <h2>
+          CONNECT WITH<br>
+          <span>LUNARMATCH.</span>
+        </h2>
+
+        <p>
+          Registration, institutional access and platform
+          enquiries will be available through the upcoming
+          access portal.
+        </p>
+
+      </div>
+
+      <div class="contact-actions">
+
+        <button
+          class="primary-btn"
+          id="registrationBtn"
+        >
+          REGISTER
+          <span>→</span>
+        </button>
+
+        <button
+          class="secondary-btn"
+          id="contactBtn"
+        >
+          CONTACT PLATFORM
+        </button>
 
       </div>
 
@@ -583,28 +1022,47 @@
   </main>
 
 
-  <!-- ================= FOOTER ================= -->
+  <!-- =====================================================
+       FOOTER
+  ====================================================== -->
 
-  <footer id="contact">
+  <footer>
 
     <div class="footer-brand">
-      <strong>LUNAR<span>MATCH</span></strong>
-      <small>LUNAR IMAGE CORRESPONDENCE SYSTEM</small>
+
+      <strong>
+        LUNAR<span>MATCH</span>
+      </strong>
+
+      <small>
+        LUNAR IMAGE CORRESPONDENCE SYSTEM
+      </small>
+
     </div>
+
 
     <div class="footer-center">
+
       CHANDRAYAAN-2 · ISRO · INDIA 🇮🇳
+
     </div>
 
+
     <div class="footer-right">
+
       <span>SPACE TECHNOLOGY</span>
       <span>© 2026</span>
+
     </div>
 
   </footer>
 
 
-  <script src="script.js?v=2"></script>
+  <!-- =====================================================
+       SCRIPT
+  ====================================================== -->
+
+  <script src="script.js?v=3"></script>
 
 </body>
 </html>
