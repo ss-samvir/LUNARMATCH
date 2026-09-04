@@ -1,21 +1,14 @@
+/* ============================================================
+   LUNARMATCH — LUNAR CORRESPONDENCE ENGINE V8
+   Browser-based image correspondence + geometric verification
+   ============================================================ */
+
 (() => {
     "use strict";
 
-    /*
-     * ============================================================
-     * LUNARMATCH V7
-     * Browser-side Lunar Correspondence Engine
-     *
-     * No backend dependency for image analysis.
-     * Classical computer vision:
-     * - Adaptive FAST/Harris-style feature detection
-     * - Gradient histogram descriptors
-     * - Ratio + mutual descriptor matching
-     * - Relaxed fallback matching
-     * - Affine RANSAC verification
-     * - Evidence-based confidence scoring
-     * ============================================================
-     */
+    /* ----------------------------------------------------------
+       CONFIGURATION
+       ---------------------------------------------------------- */
 
     const CONFIG = {
         MAX_IMAGE_DIMENSION: 1000,
@@ -28,14 +21,14 @@
         DESCRIPTOR_GRID: 4,
         ORIENTATION_BINS: 8,
 
-        LOWE_RATIO: 0.92,
+        LOWE_RATIO: 0.90,
         RELAXED_RATIO: 0.96,
 
         MAX_DESCRIPTOR_DISTANCE: 0.95,
         RELAXED_DESCRIPTOR_DISTANCE: 1.20,
 
-        RANSAC_ITERATIONS: 700,
-        RANSAC_ERROR_PIXELS: 9,
+        RANSAC_ITERATIONS: 1000,
+        RANSAC_ERROR_PIXELS: 8,
 
         MIN_FEATURES_FOR_ANALYSIS: 8,
         MIN_CANDIDATES_FOR_GEOMETRY: 4,
@@ -49,31 +42,25 @@
         EARLY_RANSAC_INLIER_RATIO: 0.65
     };
 
+    /* ----------------------------------------------------------
+       STATE
+       ---------------------------------------------------------- */
+
     const state = {
         imageAFile: null,
         imageBFile: null,
-
         imageAData: null,
         imageBData: null,
-
-        lastAnalysis: null
+        lastAnalysis: null,
+        initialized: false,
+        objectUrls: []
     };
 
-    const PIPELINE = [
-        "stageAcquire",
-        "stagePreprocess",
-        "stageExtract",
-        "stageMatch",
-        "stageVerify",
-        "stageScore",
-        "stageReport"
-    ];
+    /* ----------------------------------------------------------
+       DOM HELPERS
+       ---------------------------------------------------------- */
 
-    /* ============================================================
-       BASIC HELPERS
-       ============================================================ */
-
-    const $ = (id) => document.getElementById(id);
+    const $ = id => document.getElementById(id);
 
     function setText(id, value) {
         const el = $(id);
@@ -89,122 +76,122 @@
         return Math.max(min, Math.min(max, value));
     }
 
-    function round(value, decimals = 1) {
+    function round(value, digits = 1) {
         if (!Number.isFinite(value)) return 0;
-        const p = Math.pow(10, decimals);
+        const p = Math.pow(10, digits);
         return Math.round(value * p) / p;
     }
 
-    function delay(ms = 0) {
+    function delay(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     function nextFrame() {
-        return new Promise(resolve => {
-            requestAnimationFrame(() => resolve());
-        });
-    }
-
-    function formatTime(ms) {
-        if (ms < 1000) return `${Math.round(ms)} ms`;
-        return `${(ms / 1000).toFixed(1)} sec`;
+        return new Promise(resolve =>
+            requestAnimationFrame(() => resolve())
+        );
     }
 
     function distanceSquared(a, b) {
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        return dx * dx + dy * dy;
+        let sum = 0;
+        const n = Math.min(a.length, b.length);
+
+        for (let i = 0; i < n; i++) {
+            const d = a[i] - b[i];
+            sum += d * d;
+        }
+
+        return sum;
     }
 
-    /* ============================================================
+    function formatTime(ms) {
+        if (!Number.isFinite(ms)) return "0.0 sec";
+        return `${round(ms / 1000, 1)} sec`;
+    }
+
+    /* ----------------------------------------------------------
        PIPELINE UI
-       ============================================================ */
+       ---------------------------------------------------------- */
+
+    const PIPELINE = [
+        "stageAcquire",
+        "stagePreprocess",
+        "stageExtract",
+        "stageMatch",
+        "stageVerify",
+        "stageScore",
+        "stageReport"
+    ];
 
     function resetPipeline() {
         PIPELINE.forEach(id => {
             const el = $(id);
             if (!el) return;
 
-            el.classList.remove("active");
-            el.classList.remove("complete");
-            el.classList.remove("error");
+            el.classList.remove("active", "complete", "error");
         });
     }
 
     function setPipelineActive(id) {
-        const el = $(id);
-        if (!el) return;
+        resetPipeline();
 
-        el.classList.add("active");
-        el.classList.remove("complete");
-        el.classList.remove("error");
+        const index = PIPELINE.indexOf(id);
+
+        PIPELINE.forEach((stage, i) => {
+            const el = $(stage);
+            if (!el) return;
+
+            if (i < index) {
+                el.classList.add("complete");
+            }
+
+            if (i === index) {
+                el.classList.add("active");
+            }
+        });
     }
 
     function setPipelineComplete(id) {
         const el = $(id);
-        if (!el) return;
-
-        el.classList.remove("active");
-        el.classList.remove("error");
-        el.classList.add("complete");
+        if (el) {
+            el.classList.remove("active", "error");
+            el.classList.add("complete");
+        }
     }
 
     function setPipelineError(id) {
         const el = $(id);
-        if (!el) return;
-
-        el.classList.remove("active");
-        el.classList.remove("complete");
-        el.classList.add("error");
+        if (el) {
+            el.classList.remove("active");
+            el.classList.add("error");
+        }
     }
 
-    /* ============================================================
+    /* ----------------------------------------------------------
        RESULT RESET
-       ============================================================ */
+       ---------------------------------------------------------- */
 
     function resetResults() {
-        const defaults = {
-            score: "—",
-            features: "—",
-            confidence: "—",
-            quality: "—",
-            time: "—",
+        const ids = [
+            "overallScore",
+            "confidence",
+            "verifiedFeatures",
+            "imageQuality",
+            "processTime",
+            "rawMatches",
+            "candidateMatches",
+            "featureCoverage",
+            "correspondenceStrength",
+            "inlierRatio",
+            "geometricConsistency",
+            "modelType",
+            "verificationStatus"
+        ];
 
-            resolutionA: "—",
-            keypointsA: "—",
-            contrastA: "—",
-            sharpnessA: "—",
-            qualityScoreA: "—",
-
-            resolutionB: "—",
-            keypointsB: "—",
-            contrastB: "—",
-            sharpnessB: "—",
-            qualityScoreB: "—",
-
-            rawMatches: "—",
-            candidateMatches: "—",
-            verifiedMatches: "—",
-            featureCoverage: "—",
-            correspondenceStrength: "—",
-
-            inlierRatio: "—",
-            geometricConsistency: "—",
-            homographyStatus: "—",
-            verificationStatus: "—"
-        };
-
-        Object.entries(defaults).forEach(([id, value]) => {
-            setText(id, value);
-        });
-
-        setText(
-            "status",
-            "READY — Upload two lunar images to begin correspondence analysis."
-        );
+        ids.forEach(id => setText(id, "—"));
 
         const map = $("correspondenceMap");
-        const placeholder = $("visualPlaceholder");
+        const placeholder = $("correspondencePlaceholder");
 
         if (map) {
             map.innerHTML = "";
@@ -215,28 +202,24 @@
             placeholder.style.display = "";
         }
 
-        setText(
-            "visualNote",
-            "LOCAL FEATURES + RANSAC"
-        );
-
-        setText(
-            "interpretation",
-            "Upload two compatible lunar images and run the analysis engine."
-        );
+        const interpretation = $("interpretation");
+        if (interpretation) {
+            interpretation.textContent =
+                "Upload two lunar images to begin correspondence analysis.";
+        }
 
         setDisabled("downloadReportBtn", true);
 
-        resetPipeline();
+        state.lastAnalysis = null;
     }
 
-    /* ============================================================
-       FILE VALIDATION
-       ============================================================ */
+    /* ----------------------------------------------------------
+       IMAGE VALIDATION
+       ---------------------------------------------------------- */
 
     function validateImageFile(file) {
         if (!file) {
-            throw new Error("No image file selected.");
+            throw new Error("No image selected.");
         }
 
         const allowed = [
@@ -247,82 +230,60 @@
             "image/tiff"
         ];
 
-        const extension = file.name
-            .split(".")
-            .pop()
-            .toLowerCase();
+        const name = file.name.toLowerCase();
 
-        const allowedExtensions = [
-            "jpg",
-            "jpeg",
-            "png",
-            "webp",
-            "bmp",
-            "tif",
-            "tiff"
-        ];
+        const validExtension =
+            /\.(jpg|jpeg|png|webp|bmp|tif|tiff)$/.test(name);
 
-        if (
-            !allowed.includes(file.type) &&
-            !allowedExtensions.includes(extension)
-        ) {
+        if (!allowed.includes(file.type) && !validExtension) {
             throw new Error(
-                "Unsupported image format. Use JPG, PNG, WEBP, BMP or TIFF."
+                "Please select a JPG, PNG, WEBP, BMP or TIFF image."
             );
         }
 
         if (file.size > 25 * 1024 * 1024) {
-            throw new Error(
-                "Image is too large. Maximum supported size is 25 MB."
-            );
+            throw new Error("Image must be smaller than 25 MB.");
         }
+
+        return true;
     }
 
-    /* ============================================================
-       IMAGE LOADING
-       ============================================================ */
+    /* ----------------------------------------------------------
+       IMAGE DECODING
+       ---------------------------------------------------------- */
 
-    function readFileAsDataURL(file) {
+    function readImageFile(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
 
-            reader.onload = () => resolve(reader.result);
+            reader.onload = () => {
+                const img = new Image();
 
-            reader.onerror = () => {
-                reject(new Error("Unable to read the selected image."));
+                img.onload = () => resolve(img);
+
+                img.onerror = () =>
+                    reject(new Error("The selected image could not be decoded."));
+
+                img.src = reader.result;
             };
+
+            reader.onerror = () =>
+                reject(new Error("Could not read the selected image."));
 
             reader.readAsDataURL(file);
-        });
-    }
-
-    function loadImage(dataURL) {
-        return new Promise((resolve, reject) => {
-            const img = new Image();
-
-            img.onload = () => resolve(img);
-
-            img.onerror = () => {
-                reject(new Error("Unable to decode image."));
-            };
-
-            img.src = dataURL;
         });
     }
 
     async function imageToGray(file) {
         validateImageFile(file);
 
-        const dataURL = await readFileAsDataURL(file);
-        const img = await loadImage(dataURL);
+        const img = await readImageFile(file);
 
-        let width = img.naturalWidth;
-        let height = img.naturalHeight;
+        let width = img.naturalWidth || img.width;
+        let height = img.naturalHeight || img.height;
 
-        const scale = Math.min(
-            1,
-            CONFIG.MAX_IMAGE_DIMENSION / Math.max(width, height)
-        );
+        const scale =
+            Math.min(1, CONFIG.MAX_IMAGE_DIMENSION / Math.max(width, height));
 
         width = Math.max(1, Math.round(width * scale));
         height = Math.max(1, Math.round(height * scale));
@@ -337,1355 +298,762 @@
 
         ctx.drawImage(img, 0, 0, width, height);
 
-        const rgba = ctx.getImageData(
-            0,
-            0,
-            width,
-            height
-        ).data;
+        const data = ctx.getImageData(0, 0, width, height);
 
         const gray = new Float32Array(width * height);
 
-        for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
-            gray[i] =
-                0.299 * rgba[p] +
-                0.587 * rgba[p + 1] +
-                0.114 * rgba[p + 2];
+        for (let i = 0, p = 0; i < data.data.length; i += 4, p++) {
+            const r = data.data[i];
+            const g = data.data[i + 1];
+            const b = data.data[i + 2];
+
+            gray[p] =
+                0.299 * r +
+                0.587 * g +
+                0.114 * b;
         }
 
         return {
-            data: gray,
             width,
             height,
-            originalWidth: img.naturalWidth,
-            originalHeight: img.naturalHeight,
-            dataURL
+            data: gray
         };
     }
 
-    /* ============================================================
-       RESIZING
-       ============================================================ */
-
     function resizeGray(image, maxDimension) {
-        if (
-            Math.max(image.width, image.height) <= maxDimension
-        ) {
+        const scale =
+            Math.min(1, maxDimension / Math.max(image.width, image.height));
+
+        if (scale >= 0.999) {
             return image;
         }
-
-        const scale =
-            maxDimension /
-            Math.max(image.width, image.height);
 
         const width = Math.max(1, Math.round(image.width * scale));
         const height = Math.max(1, Math.round(image.height * scale));
 
-        const output = new Float32Array(width * height);
+        const result = new Float32Array(width * height);
 
         for (let y = 0; y < height; y++) {
-            const sy =
-                (y / Math.max(1, height - 1)) *
-                (image.height - 1);
-
-            const y0 = Math.floor(sy);
-            const y1 = Math.min(image.height - 1, y0 + 1);
-            const fy = sy - y0;
+            const sy = Math.min(
+                image.height - 1,
+                Math.floor(y / scale)
+            );
 
             for (let x = 0; x < width; x++) {
-                const sx =
-                    (x / Math.max(1, width - 1)) *
-                    (image.width - 1);
+                const sx = Math.min(
+                    image.width - 1,
+                    Math.floor(x / scale)
+                );
 
-                const x0 = Math.floor(sx);
-                const x1 = Math.min(image.width - 1, x0 + 1);
-                const fx = sx - x0;
-
-                const a =
-                    image.data[y0 * image.width + x0];
-
-                const b =
-                    image.data[y0 * image.width + x1];
-
-                const c =
-                    image.data[y1 * image.width + x0];
-
-                const d =
-                    image.data[y1 * image.width + x1];
-
-                const top = a + (b - a) * fx;
-                const bottom = c + (d - c) * fx;
-
-                output[y * width + x] =
-                    top + (bottom - top) * fy;
+                result[y * width + x] =
+                    image.data[sy * image.width + sx];
             }
         }
 
         return {
-            ...image,
-            data: output,
             width,
-            height
+            height,
+            data: result
         };
     }
 
-    /* ============================================================
-       PERCENTILE
-       ============================================================ */
+    /* ----------------------------------------------------------
+       IMAGE NORMALIZATION
+       ---------------------------------------------------------- */
 
-    function percentile(values, q) {
-        if (!values.length) return 0;
+    function percentile(array, q) {
+        if (!array.length) return 0;
 
-        const sampleLimit = 12000;
-
-        let sample;
-
-        if (values.length <= sampleLimit) {
-            sample = Array.from(values);
-        } else {
-            sample = [];
-
-            const step = values.length / sampleLimit;
-
-            for (let i = 0; i < sampleLimit; i++) {
-                sample.push(
-                    values[Math.floor(i * step)]
-                );
-            }
-        }
-
-        sample.sort((a, b) => a - b);
+        const sorted = Array.from(array).sort((a, b) => a - b);
 
         const index =
-            (sample.length - 1) * q;
+            clamp(q, 0, 1) * (sorted.length - 1);
 
         const lower = Math.floor(index);
         const upper = Math.ceil(index);
 
         if (lower === upper) {
-            return sample[lower];
+            return sorted[lower];
         }
 
+        const weight = index - lower;
+
         return (
-            sample[lower] +
-            (sample[upper] - sample[lower]) *
-            (index - lower)
+            sorted[lower] * (1 - weight) +
+            sorted[upper] * weight
         );
     }
 
-    /* ============================================================
-       LOCAL NORMALIZATION
-       ============================================================ */
-
     function localNormalize(image) {
-        image = resizeGray(
-            image,
-            CONFIG.WORK_MAX_DIMENSION
-        );
+        const data = new Float32Array(image.data.length);
 
-        const width = image.width;
-        const height = image.height;
-        const n = width * height;
+        const p5 = percentile(image.data, 0.05);
+        const p95 = percentile(image.data, 0.95);
 
-        const normalized = new Float32Array(n);
+        const range = Math.max(1, p95 - p5);
 
-        const integral = new Float64Array(
-            (width + 1) * (height + 1)
-        );
-
-        const integralSq = new Float64Array(
-            (width + 1) * (height + 1)
-        );
-
-        for (let y = 1; y <= height; y++) {
-            let rowSum = 0;
-            let rowSq = 0;
-
-            for (let x = 1; x <= width; x++) {
-                const value =
-                    image.data[
-                        (y - 1) * width + (x - 1)
-                    ];
-
-                rowSum += value;
-                rowSq += value * value;
-
-                const index =
-                    y * (width + 1) + x;
-
-                integral[index] =
-                    integral[index - (width + 1)] +
-                    rowSum;
-
-                integralSq[index] =
-                    integralSq[index - (width + 1)] +
-                    rowSq;
-            }
-        }
-
-        const radius = 6;
-
-        function regionSum(buffer, x0, y0, x1, y1) {
-            return (
-                buffer[y1 * (width + 1) + x1] -
-                buffer[y0 * (width + 1) + x1] -
-                buffer[y1 * (width + 1) + x0] +
-                buffer[y0 * (width + 1) + x0]
+        for (let i = 0; i < image.data.length; i++) {
+            data[i] = clamp(
+                (image.data[i] - p5) / range,
+                0,
+                1
             );
         }
 
-        for (let y = 0; y < height; y++) {
-            const y0 = Math.max(0, y - radius);
-            const y1 = Math.min(height - 1, y + radius);
-
-            for (let x = 0; x < width; x++) {
-                const x0 = Math.max(0, x - radius);
-                const x1 = Math.min(width - 1, x + radius);
-
-                const rx0 = x0;
-                const ry0 = y0;
-                const rx1 = x1 + 1;
-                const ry1 = y1 + 1;
-
-                const count =
-                    (rx1 - rx0) *
-                    (ry1 - ry0);
-
-                const sum = regionSum(
-                    integral,
-                    rx0,
-                    ry0,
-                    rx1,
-                    ry1
-                );
-
-                const sq = regionSum(
-                    integralSq,
-                    rx0,
-                    ry0,
-                    rx1,
-                    ry1
-                );
-
-                const mean = sum / count;
-
-                const variance = Math.max(
-                    4,
-                    sq / count - mean * mean
-                );
-
-                const index =
-                    y * width + x;
-
-                normalized[index] =
-                    (image.data[index] - mean) /
-                    Math.sqrt(variance);
-            }
-        }
-
-        /*
-         * Mild smoothing removes single-pixel noise while
-         * preserving crater/ridge boundaries.
-         */
-        const smoothed = new Float32Array(n);
-
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const center =
-                    normalized[y * width + x];
-
-                const left =
-                    normalized[
-                        y * width +
-                        Math.max(0, x - 1)
-                    ];
-
-                const right =
-                    normalized[
-                        y * width +
-                        Math.min(width - 1, x + 1)
-                    ];
-
-                const up =
-                    normalized[
-                        Math.max(0, y - 1) * width + x
-                    ];
-
-                const down =
-                    normalized[
-                        Math.min(height - 1, y + 1) * width + x
-                    ];
-
-                smoothed[y * width + x] =
-                    center * 0.50 +
-                    (left + right + up + down) * 0.125;
-            }
-        }
-
         return {
-            ...image,
-            data: smoothed
+            width: image.width,
+            height: image.height,
+            data
         };
     }
 
-    /* ============================================================
+    /* ----------------------------------------------------------
        IMAGE QUALITY
-       ============================================================ */
+       ---------------------------------------------------------- */
 
     function imageQuality(image) {
         const data = image.data;
-        const n = data.length;
 
-        let sum = 0;
-        let sumSq = 0;
-
-        for (let i = 0; i < n; i++) {
-            sum += data[i];
-            sumSq += data[i] * data[i];
+        if (!data.length) {
+            return {
+                contrast: 0,
+                sharpness: 0,
+                score: 0
+            };
         }
 
-        const mean = sum / n;
-        const variance =
-            Math.max(0, sumSq / n - mean * mean);
+        const sampleStep = Math.max(
+            1,
+            Math.floor(data.length / 50000)
+        );
 
-        const contrast = Math.sqrt(variance);
+        const samples = [];
 
-        let sharpnessSum = 0;
-        let sharpnessCount = 0;
+        for (let i = 0; i < data.length; i += sampleStep) {
+            samples.push(data[i]);
+        }
 
-        for (let y = 1; y < image.height - 1; y++) {
-            for (let x = 1; x < image.width - 1; x++) {
-                const i =
-                    y * image.width + x;
+        let mean = 0;
+
+        for (const v of samples) {
+            mean += v;
+        }
+
+        mean /= samples.length;
+
+        let variance = 0;
+
+        for (const v of samples) {
+            const d = v - mean;
+            variance += d * d;
+        }
+
+        variance /= samples.length;
+
+        let sharpness = 0;
+        let count = 0;
+
+        for (let y = 1; y < image.height - 1; y += 2) {
+            for (let x = 1; x < image.width - 1; x += 2) {
+                const i = y * image.width + x;
 
                 const lap =
                     image.data[i - image.width] +
+                    image.data[i + image.width] +
                     image.data[i - 1] +
-                    image.data[i + 1] +
-                    image.data[i + image.width] -
+                    image.data[i + 1] -
                     4 * image.data[i];
 
-                sharpnessSum += lap * lap;
-                sharpnessCount++;
+                sharpness += lap * lap;
+                count++;
             }
         }
 
-        const sharpness =
-            sharpnessCount
-                ? sharpnessSum / sharpnessCount
-                : 0;
-
-        const p05 = percentile(data, 0.05);
-        const p95 = percentile(data, 0.95);
-
-        const dynamicRange = p95 - p05;
+        sharpness = count ? sharpness / count : 0;
 
         const contrastScore =
-            clamp((contrast / 55) * 100, 0, 100);
+            clamp(Math.sqrt(variance) * 3.0, 0, 1);
 
         const sharpnessScore =
-            clamp(
-                (Math.log1p(sharpness) /
-                    Math.log1p(5000)) *
-                100,
-                0,
-                100
+            clamp(Math.log10(sharpness + 1) / 4.0, 0, 1);
+
+        const score =
+            100 *
+            (
+                0.55 * contrastScore +
+                0.45 * sharpnessScore
             );
 
-        const rangeScore =
-            clamp((dynamicRange / 4.0) * 100, 0, 100);
-
-        const qualityScore =
-            contrastScore * 0.35 +
-            sharpnessScore * 0.40 +
-            rangeScore * 0.25;
-
         return {
-            mean,
-            variance,
-            contrast,
+            contrast: Math.sqrt(variance) * 100,
             sharpness,
-            dynamicRange,
-            qualityScore: clamp(qualityScore, 0, 100)
+            score: clamp(score, 0, 100)
         };
     }
 
-    /* ============================================================
+    /* ----------------------------------------------------------
        GRADIENT
-       ============================================================ */
+       ---------------------------------------------------------- */
 
     function gradientAt(image, x, y) {
-        const width = image.width;
-        const height = image.height;
+        const w = image.width;
+        const h = image.height;
 
-        x = clamp(x, 1, width - 2);
-        y = clamp(y, 1, height - 2);
+        x = clamp(Math.round(x), 1, w - 2);
+        y = clamp(Math.round(y), 1, h - 2);
 
-        const left =
-            image.data[y * width + x - 1];
+        const i = y * w + x;
 
-        const right =
-            image.data[y * width + x + 1];
+        const gx =
+            image.data[i + 1] -
+            image.data[i - 1];
 
-        const up =
-            image.data[(y - 1) * width + x];
-
-        const down =
-            image.data[(y + 1) * width + x];
+        const gy =
+            image.data[i + w] -
+            image.data[i - w];
 
         return {
-            gx: (right - left) * 0.5,
-            gy: (down - up) * 0.5
+            gx,
+            gy,
+            magnitude: Math.sqrt(gx * gx + gy * gy),
+            angle: Math.atan2(gy, gx)
         };
     }
 
-    /* ============================================================
+    /* ----------------------------------------------------------
        FEATURE DETECTION
-       ============================================================ */
+       ---------------------------------------------------------- */
 
     function detectFeatures(image) {
-        const width = image.width;
-        const height = image.height;
-
         const candidates = [];
 
-        /*
-         * Estimate image contrast so the detector adapts
-         * automatically between bright/dark lunar imagery.
-         */
-        let sum = 0;
-        let sq = 0;
+        const w = image.width;
+        const h = image.height;
 
-        for (let i = 0; i < image.data.length; i++) {
-            const v = image.data[i];
-            sum += v;
-            sq += v * v;
-        }
+        const border = CONFIG.PATCH_RADIUS + 3;
 
-        const mean =
-            sum / image.data.length;
-
-        const variance =
-            Math.max(
-                1,
-                sq / image.data.length -
-                mean * mean
-            );
-
-        const sigma = Math.sqrt(variance);
-
-        const threshold =
-            clamp(sigma * 0.55, 7, 22);
-
-        const radius = 3;
-
-        const circle = [
-            [0, -3],
-            [1, -3],
-            [2, -2],
-            [3, -1],
-            [3, 0],
-            [3, 1],
-            [2, 2],
-            [1, 3],
-            [0, 3],
-            [-1, 3],
-            [-2, 2],
-            [-3, 1],
-            [-3, 0],
-            [-3, -1],
-            [-2, -2],
-            [-1, -3]
-        ];
+        const step = Math.max(
+            4,
+            Math.floor(
+                Math.min(w, h) / 100
+            )
+        );
 
         for (
-            let y = radius + 1;
-            y < height - radius - 1;
-            y++
+            let y = border;
+            y < h - border;
+            y += step
         ) {
             for (
-                let x = radius + 1;
-                x < width - radius - 1;
-                x++
+                let x = border;
+                x < w - border;
+                x += step
             ) {
-                const center =
-                    image.data[y * width + x];
+                const g = gradientAt(image, x, y);
 
-                let brighter = 0;
-                let darker = 0;
-
-                for (const [dx, dy] of circle) {
-                    const value =
-                        image.data[
-                            (y + dy) * width +
-                            (x + dx)
-                        ];
-
-                    if (value > center + threshold) {
-                        brighter++;
-                    }
-
-                    if (value < center - threshold) {
-                        darker++;
-                    }
-                }
-
-                /*
-                 * FAST-like contiguous arc approximation.
-                 */
-                if (
-                    brighter < 5 &&
-                    darker < 5
-                ) {
+                if (g.magnitude < 0.015) {
                     continue;
                 }
 
-                let gx = 0;
-                let gy = 0;
-
-                for (let dy = -1; dy <= 1; dy++) {
-                    for (let dx = -1; dx <= 1; dx++) {
-                        if (dx === 0 && dy === 0) continue;
-
-                        const weight =
-                            dx === 0 || dy === 0
-                                ? 1
-                                : 0.707;
-
-                        const current =
-                            image.data[
-                                (y + dy) * width +
-                                (x + dx)
-                            ];
-
-                        gx +=
-                            (current - center) *
-                            dx *
-                            weight;
-
-                        gy +=
-                            (current - center) *
-                            dy *
-                            weight;
-                    }
-                }
-
-                const gradientStrength =
-                    Math.sqrt(gx * gx + gy * gy);
-
-                /*
-                 * Harris-style corner response.
-                 */
-                let sxx = 0;
-                let syy = 0;
-                let sxy = 0;
+                let score = 0;
 
                 for (let dy = -2; dy <= 2; dy++) {
                     for (let dx = -2; dx <= 2; dx++) {
-                        const g =
-                            gradientAt(
-                                image,
-                                x + dx,
-                                y + dy
-                            );
+                        if (!dx && !dy) continue;
 
-                        sxx += g.gx * g.gx;
-                        syy += g.gy * g.gy;
-                        sxy += g.gx * g.gy;
+                        const n = gradientAt(
+                            image,
+                            x + dx,
+                            y + dy
+                        );
+
+                        score += Math.abs(
+                            g.magnitude - n.magnitude
+                        );
                     }
                 }
 
-                const determinant =
-                    sxx * syy - sxy * sxy;
-
-                const trace =
-                    sxx + syy + 1e-6;
-
-                const harris =
-                    determinant -
-                    0.04 * trace * trace;
-
-                const response =
-                    Math.max(
-                        0,
-                        harris
-                    ) +
-                    gradientStrength * 4;
-
-                if (response <= 5) continue;
+                score *= g.magnitude;
 
                 candidates.push({
                     x,
                     y,
-                    response
+                    score,
+                    magnitude: g.magnitude,
+                    angle: g.angle
                 });
             }
         }
 
         candidates.sort(
-            (a, b) => b.response - a.response
+            (a, b) => b.score - a.score
         );
-
-        /*
-         * Spatial quota:
-         * Don't allow one crater/ridge to consume
-         * the entire feature budget.
-         */
-        const cellWidth =
-            width / CONFIG.GRID_COLS;
-
-        const cellHeight =
-            height / CONFIG.GRID_ROWS;
-
-        const perCell =
-            Math.ceil(
-                CONFIG.MAX_KEYPOINTS /
-                (CONFIG.GRID_ROWS * CONFIG.GRID_COLS)
-            );
-
-        const cellCounts =
-            new Map();
 
         const selected = [];
 
         const minDistance =
-            Math.max(
-                8,
-                Math.min(width, height) * 0.018
-            );
+            Math.max(6, Math.min(w, h) * 0.025);
 
-        const minDistanceSq =
+        const minDistanceSquared =
             minDistance * minDistance;
 
-        for (const candidate of candidates) {
-            const col =
-                Math.min(
-                    CONFIG.GRID_COLS - 1,
-                    Math.floor(candidate.x / cellWidth)
-                );
-
-            const row =
-                Math.min(
-                    CONFIG.GRID_ROWS - 1,
-                    Math.floor(candidate.y / cellHeight)
-                );
-
-            const cell =
-                row * CONFIG.GRID_COLS + col;
-
-            const count =
-                cellCounts.get(cell) || 0;
-
-            if (count >= perCell) {
-                continue;
-            }
-
+        for (const feature of candidates) {
             let tooClose = false;
 
-            /*
-             * Compare only against nearby selected points
-             * by using a small spatial neighborhood.
-             */
-            for (let i = selected.length - 1; i >= 0; i--) {
-                const point = selected[i];
-
-                if (
-                    Math.abs(point.x - candidate.x) >
-                    minDistance * 1.5
-                ) {
-                    continue;
-                }
-
-                if (
-                    Math.abs(point.y - candidate.y) >
-                    minDistance * 1.5
-                ) {
-                    continue;
-                }
-
+            for (const existing of selected) {
                 if (
                     distanceSquared(
-                        point,
-                        candidate
-                    ) < minDistanceSq
+                        [feature.x, feature.y],
+                        [existing.x, existing.y]
+                    ) < minDistanceSquared
                 ) {
                     tooClose = true;
                     break;
                 }
             }
 
-            if (tooClose) continue;
-
-            selected.push(candidate);
-
-            cellCounts.set(
-                cell,
-                count + 1
-            );
-
-            if (
-                selected.length >=
-                CONFIG.MAX_KEYPOINTS
-            ) {
-                break;
+            if (!tooClose) {
+                selected.push(feature);
             }
-        }
 
-        /*
-         * If spatial quotas were too restrictive,
-         * fill remaining capacity with strong points.
-         */
-        if (
-            selected.length <
-            Math.min(
-                CONFIG.MAX_KEYPOINTS,
-                candidates.length
-            )
-        ) {
-            for (const candidate of candidates) {
-                if (
-                    selected.length >=
-                    CONFIG.MAX_KEYPOINTS
-                ) {
-                    break;
-                }
-
-                if (
-                    selected.includes(candidate)
-                ) {
-                    continue;
-                }
-
-                selected.push(candidate);
+            if (selected.length >= CONFIG.MAX_KEYPOINTS) {
+                break;
             }
         }
 
         return selected;
     }
 
-    /* ============================================================
-       ROBUST GRADIENT DESCRIPTOR
-       ============================================================ */
+    /* ----------------------------------------------------------
+       FEATURE DESCRIPTOR
+       ---------------------------------------------------------- */
 
     function describeFeature(image, feature) {
-        const grid =
-            CONFIG.DESCRIPTOR_GRID;
+        const radius = CONFIG.PATCH_RADIUS;
+        const grid = CONFIG.DESCRIPTOR_GRID;
+        const bins = CONFIG.ORIENTATION_BINS;
 
-        const bins =
-            CONFIG.ORIENTATION_BINS;
+        const descriptor = [];
 
-        const radius =
-            CONFIG.PATCH_RADIUS;
-
-        /*
-         * Determine dominant orientation.
-         */
-        let dominantX = 0;
-        let dominantY = 0;
-
-        for (
-            let y = -radius;
-            y <= radius;
-            y += 2
-        ) {
-            for (
-                let x = -radius;
-                x <= radius;
-                x += 2
-            ) {
-                const g =
-                    gradientAt(
-                        image,
-                        feature.x + x,
-                        feature.y + y
-                    );
-
-                const magnitude =
-                    Math.sqrt(
-                        g.gx * g.gx +
-                        g.gy * g.gy
-                    );
-
-                dominantX +=
-                    g.gx * magnitude;
-
-                dominantY +=
-                    g.gy * magnitude;
-            }
-        }
-
-        const dominantAngle =
-            Math.atan2(
-                dominantY,
-                dominantX
-            );
-
-        const descriptor =
-            new Float32Array(
-                grid * grid * bins
-            );
-
-        /*
-         * Rotate sampling coordinates according to
-         * dominant local gradient orientation.
-         */
-        const cosA =
-            Math.cos(-dominantAngle);
-
-        const sinA =
-            Math.sin(-dominantAngle);
+        const start =
+            -radius;
 
         const cellSize =
             (radius * 2) / grid;
 
-        for (
-            let py = -radius;
-            py < radius;
-            py += 1
-        ) {
-            for (
-                let px = -radius;
-                px < radius;
-                px += 1
-            ) {
-                const rx =
-                    px * cosA -
-                    py * sinA;
+        for (let gy = 0; gy < grid; gy++) {
+            for (let gx = 0; gx < grid; gx++) {
 
-                const ry =
-                    px * sinA +
-                    py * cosA;
+                const hist =
+                    new Float32Array(bins);
 
-                const sx =
-                    Math.round(
-                        feature.x + rx
+                const x0 =
+                    Math.floor(
+                        feature.x -
+                        radius +
+                        gx * cellSize
                     );
 
-                const sy =
-                    Math.round(
-                        feature.y + ry
+                const y0 =
+                    Math.floor(
+                        feature.y -
+                        radius +
+                        gy * cellSize
                     );
 
-                if (
-                    sx < 1 ||
-                    sy < 1 ||
-                    sx >= image.width - 1 ||
-                    sy >= image.height - 1
+                const x1 =
+                    Math.floor(
+                        feature.x -
+                        radius +
+                        (gx + 1) * cellSize
+                    );
+
+                const y1 =
+                    Math.floor(
+                        feature.y -
+                        radius +
+                        (gy + 1) * cellSize
+                    );
+
+                for (
+                    let y = y0;
+                    y < y1;
+                    y++
                 ) {
-                    continue;
+                    for (
+                        let x = x0;
+                        x < x1;
+                        x++
+                    ) {
+                        if (
+                            x < 1 ||
+                            y < 1 ||
+                            x >= image.width - 1 ||
+                            y >= image.height - 1
+                        ) {
+                            continue;
+                        }
+
+                        const g =
+                            gradientAt(
+                                image,
+                                x,
+                                y
+                            );
+
+                        const magnitude =
+                            g.magnitude;
+
+                        let angle =
+                            g.angle -
+                            feature.angle;
+
+                        while (angle < 0) {
+                            angle += Math.PI * 2;
+                        }
+
+                        while (angle >= Math.PI * 2) {
+                            angle -= Math.PI * 2;
+                        }
+
+                        const bin = Math.floor(
+                            angle /
+                            (Math.PI * 2 / bins)
+                        ) % bins;
+
+                        hist[bin] += magnitude;
+                    }
                 }
 
-                const g =
-                    gradientAt(
-                        image,
-                        sx,
-                        sy
-                    );
-
-                const magnitude =
-                    Math.sqrt(
-                        g.gx * g.gx +
-                        g.gy * g.gy
-                    );
-
-                if (magnitude < 0.01) {
-                    continue;
+                for (let b = 0; b < bins; b++) {
+                    descriptor.push(hist[b]);
                 }
-
-                let angle =
-                    Math.atan2(
-                        g.gy,
-                        g.gx
-                    ) -
-                    dominantAngle;
-
-                while (angle < 0) {
-                    angle += Math.PI * 2;
-                }
-
-                while (angle >= Math.PI * 2) {
-                    angle -= Math.PI * 2;
-                }
-
-                const binFloat =
-                    (angle /
-                        (Math.PI * 2)) *
-                    bins;
-
-                const bin0 =
-                    Math.floor(binFloat) % bins;
-
-                const fraction =
-                    binFloat - Math.floor(binFloat);
-
-                const bin1 =
-                    (bin0 + 1) % bins;
-
-                const cellX =
-                    clamp(
-                        Math.floor(
-                            (px + radius) /
-                            cellSize
-                        ),
-                        0,
-                        grid - 1
-                    );
-
-                const cellY =
-                    clamp(
-                        Math.floor(
-                            (py + radius) /
-                            cellSize
-                        ),
-                        0,
-                        grid - 1
-                    );
-
-                const base =
-                    (
-                        cellY * grid +
-                        cellX
-                    ) * bins;
-
-                /*
-                 * Distance from feature center gives
-                 * a gentle spatial weighting.
-                 */
-                const radial =
-                    Math.sqrt(
-                        px * px +
-                        py * py
-                    ) / radius;
-
-                const weight =
-                    Math.exp(
-                        -0.5 *
-                        radial *
-                        radial
-                    );
-
-                descriptor[base + bin0] +=
-                    magnitude *
-                    weight *
-                    (1 - fraction);
-
-                descriptor[base + bin1] +=
-                    magnitude *
-                    weight *
-                    fraction;
             }
         }
 
-        /*
-         * Root-style normalization.
-         */
         let norm = 0;
 
-        for (let i = 0; i < descriptor.length; i++) {
-            norm +=
-                descriptor[i] *
-                descriptor[i];
+        for (const v of descriptor) {
+            norm += v * v;
         }
 
-        norm =
-            Math.sqrt(norm) + 1e-8;
+        norm = Math.sqrt(norm) || 1;
 
-        for (let i = 0; i < descriptor.length; i++) {
-            descriptor[i] /= norm;
-        }
-
-        /*
-         * Hellinger/root normalization.
-         */
         for (let i = 0; i < descriptor.length; i++) {
             descriptor[i] =
-                Math.sqrt(
-                    Math.abs(descriptor[i])
-                );
-        }
-
-        norm = 0;
-
-        for (let i = 0; i < descriptor.length; i++) {
-            norm +=
-                descriptor[i] *
-                descriptor[i];
-        }
-
-        norm =
-            Math.sqrt(norm) + 1e-8;
-
-        for (let i = 0; i < descriptor.length; i++) {
-            descriptor[i] /= norm;
+                descriptor[i] / norm;
         }
 
         return descriptor;
     }
 
-    async function extractFeatures(image) {
-        const points =
+    function extractFeatures(image) {
+        const features =
             detectFeatures(image);
 
-        const features = [];
-
-        for (let i = 0; i < points.length; i++) {
-            const point = points[i];
-
-            const descriptor =
+        for (const feature of features) {
+            feature.descriptor =
                 describeFeature(
                     image,
-                    point
+                    feature
                 );
-
-            features.push({
-                x: point.x,
-                y: point.y,
-                response: point.response,
-                descriptor
-            });
-
-            if (i % 80 === 0) {
-                await delay(0);
-            }
         }
 
         return features;
     }
 
-    /* ============================================================
-       DESCRIPTOR DISTANCE
-       ============================================================ */
+    /* ----------------------------------------------------------
+       DESCRIPTOR MATCHING
+       ---------------------------------------------------------- */
 
     function descriptorDistance(a, b) {
         let sum = 0;
 
-        for (let i = 0; i < a.length; i++) {
+        const n =
+            Math.min(a.length, b.length);
+
+        for (let i = 0; i < n; i++) {
             const d = a[i] - b[i];
             sum += d * d;
         }
 
-        return Math.sqrt(sum);
+        return Math.sqrt(sum / n);
     }
 
-    /* ============================================================
-       MATCHING
-       ============================================================ */
+    function matchFeatures(featuresA, featuresB) {
+        const matches = [];
 
-    function nearestTwo(query, features) {
-        let bestIndex = -1;
-        let bestDistance = Infinity;
+        const reverseBest =
+            new Map();
 
-        let secondDistance = Infinity;
+        /* First determine best B -> A matches. */
 
-        for (let i = 0; i < features.length; i++) {
-            const distance =
-                descriptorDistance(
-                    query.descriptor,
-                    features[i].descriptor
+        for (let j = 0; j < featuresB.length; j++) {
+            let bestIndex = -1;
+            let bestDistance = Infinity;
+
+            for (let i = 0; i < featuresA.length; i++) {
+                const d =
+                    descriptorDistance(
+                        featuresB[j].descriptor,
+                        featuresA[i].descriptor
+                    );
+
+                if (d < bestDistance) {
+                    bestDistance = d;
+                    bestIndex = i;
+                }
+            }
+
+            if (bestIndex >= 0) {
+                reverseBest.set(
+                    j,
+                    {
+                        index: bestIndex,
+                        distance: bestDistance
+                    }
                 );
-
-            if (distance < bestDistance) {
-                secondDistance = bestDistance;
-                bestDistance = distance;
-                bestIndex = i;
-            } else if (
-                distance < secondDistance
-            ) {
-                secondDistance = distance;
             }
         }
 
-        return {
-            bestIndex,
-            bestDistance,
-            secondDistance
-        };
-    }
+        /* Then A -> B using Lowe ratio + mutual consistency. */
 
-    function matchFeatures(
-        featuresA,
-        featuresB,
-        options = {}
-    ) {
-        const ratio =
-            options.ratio ||
-            CONFIG.LOWE_RATIO;
+        for (let i = 0; i < featuresA.length; i++) {
+            let best = null;
+            let second = null;
 
-        const maxDistance =
-            options.maxDistance ||
-            CONFIG.MAX_DESCRIPTOR_DISTANCE;
+            for (let j = 0; j < featuresB.length; j++) {
+                const d =
+                    descriptorDistance(
+                        featuresA[i].descriptor,
+                        featuresB[j].descriptor
+                    );
 
-        const limitA =
-            featuresA
-                .slice()
-                .sort(
-                    (a, b) =>
-                        b.response - a.response
-                )
-                .slice(
-                    0,
-                    CONFIG.MAX_MATCH_FEATURES
-                );
-
-        const limitB =
-            featuresB
-                .slice()
-                .sort(
-                    (a, b) =>
-                        b.response - a.response
-                )
-                .slice(
-                    0,
-                    CONFIG.MAX_MATCH_FEATURES
-                );
-
-        const forward = [];
-
-        for (let i = 0; i < limitA.length; i++) {
-            const result =
-                nearestTwo(
-                    limitA[i],
-                    limitB
-                );
-
-            if (result.bestIndex < 0) {
-                continue;
+                if (!best || d < best.distance) {
+                    second = best;
+                    best = {
+                        index: j,
+                        distance: d
+                    };
+                } else if (
+                    !second ||
+                    d < second.distance
+                ) {
+                    second = {
+                        index: j,
+                        distance: d
+                    };
+                }
             }
 
-            const ratioValue =
-                result.secondDistance === Infinity
-                    ? 0
-                    : result.bestDistance /
-                      result.secondDistance;
+            if (!best) continue;
+
+            const secondDistance =
+                second
+                    ? second.distance
+                    : Infinity;
+
+            const ratio =
+                best.distance /
+                Math.max(
+                    secondDistance,
+                    0.000001
+                );
+
+            const reverse =
+                reverseBest.get(best.index);
+
+            const mutual =
+                reverse &&
+                reverse.index === i;
 
             if (
-                ratioValue <= ratio &&
-                result.bestDistance <= maxDistance
+                (
+                    ratio <= CONFIG.LOWE_RATIO &&
+                    best.distance <=
+                        CONFIG.MAX_DESCRIPTOR_DISTANCE
+                ) ||
+                (
+                    mutual &&
+                    ratio <= CONFIG.RELAXED_RATIO &&
+                    best.distance <=
+                        CONFIG.RELAXED_DESCRIPTOR_DISTANCE
+                )
             ) {
-                forward.push({
-                    a: limitA[i],
-                    b: limitB[result.bestIndex],
-                    distance: result.bestDistance,
-                    ratio: ratioValue
+                matches.push({
+                    indexA: i,
+                    indexB: best.index,
+                    distance: best.distance,
+                    ratio,
+                    mutual: !!mutual
                 });
             }
         }
 
-        /*
-         * Reverse pass for mutual consistency.
-         */
-        const reverseMap =
-            new Map();
+        matches.sort(
+            (a, b) => {
+                const scoreA =
+                    a.distance +
+                    a.ratio * 0.25;
 
-        for (let i = 0; i < limitB.length; i++) {
-            const result =
-                nearestTwo(
-                    limitB[i],
-                    limitA
-                );
+                const scoreB =
+                    b.distance +
+                    b.ratio * 0.25;
 
-            if (result.bestIndex < 0) {
-                continue;
+                return scoreA - scoreB;
             }
-
-            reverseMap.set(
-                limitB[i],
-                {
-                    feature: limitA[result.bestIndex],
-                    distance: result.bestDistance
-                }
-            );
-        }
-
-        const mutual = [];
-
-        for (const match of forward) {
-            const reverse =
-                reverseMap.get(match.b);
-
-            if (!reverse) continue;
-
-            if (
-                reverse.feature !== match.a
-            ) {
-                continue;
-            }
-
-            mutual.push(match);
-        }
-
-        /*
-         * Sort strongest descriptor matches first.
-         */
-        mutual.sort(
-            (a, b) =>
-                a.distance - b.distance
         );
 
-        return mutual;
+        return matches.slice(
+            0,
+            CONFIG.MAX_MATCH_FEATURES
+        );
     }
 
-    async function robustMatch(
-        featuresA,
-        featuresB
-    ) {
+    /* ----------------------------------------------------------
+       ROBUST MATCHING
+       ---------------------------------------------------------- */
+
+    function robustMatch(featuresA, featuresB) {
         let matches =
             matchFeatures(
                 featuresA,
-                featuresB,
-                {
-                    ratio: CONFIG.LOWE_RATIO,
-                    maxDistance:
-                        CONFIG.MAX_DESCRIPTOR_DISTANCE
-                }
+                featuresB
             );
 
-        let mode = "STRICT";
+        /* If too few matches survive, try a relaxed pass. */
 
-        /*
-         * If strict matching is too sparse,
-         * perform a controlled relaxed pass.
-         */
-        if (matches.length < 8) {
-            const relaxed =
-                matchFeatures(
-                    featuresA,
-                    featuresB,
-                    {
-                        ratio:
-                            CONFIG.RELAXED_RATIO,
-                        maxDistance:
-                            CONFIG.RELAXED_DESCRIPTOR_DISTANCE
+        if (matches.length < CONFIG.MIN_CANDIDATES_FOR_GEOMETRY) {
+            const relaxed = [];
+
+            for (let i = 0; i < featuresA.length; i++) {
+                let best = null;
+                let second = null;
+
+                for (let j = 0; j < featuresB.length; j++) {
+                    const d =
+                        descriptorDistance(
+                            featuresA[i].descriptor,
+                            featuresB[j].descriptor
+                        );
+
+                    if (!best || d < best.distance) {
+                        second = best;
+                        best = {
+                            index: j,
+                            distance: d
+                        };
+                    } else if (
+                        !second ||
+                        d < second.distance
+                    ) {
+                        second = {
+                            index: j,
+                            distance: d
+                        };
                     }
-                );
+                }
 
-            if (
-                relaxed.length >
-                matches.length
-            ) {
-                matches = relaxed;
-                mode = "RELAXED";
-            }
-        }
+                if (!best) continue;
 
-        /*
-         * Deduplicate spatially similar matches.
-         */
-        const filtered = [];
-
-        for (const match of matches) {
-            let duplicate = false;
-
-            for (const existing of filtered) {
-                const da =
-                    distanceSquared(
-                        match.a,
-                        existing.a
-                    );
-
-                const db =
-                    distanceSquared(
-                        match.b,
-                        existing.b
+                const ratio =
+                    best.distance /
+                    Math.max(
+                        second
+                            ? second.distance
+                            : Infinity,
+                        0.000001
                     );
 
                 if (
-                    da < 9 &&
-                    db < 9
+                    ratio <= CONFIG.RELAXED_RATIO &&
+                    best.distance <=
+                        CONFIG.RELAXED_DESCRIPTOR_DISTANCE
                 ) {
-                    duplicate = true;
-                    break;
+                    relaxed.push({
+                        indexA: i,
+                        indexB: best.index,
+                        distance: best.distance,
+                        ratio,
+                        mutual: false
+                    });
                 }
             }
 
-            if (!duplicate) {
-                filtered.push(match);
+            relaxed.sort(
+                (a, b) =>
+                    a.distance - b.distance
+            );
+
+            matches = relaxed.slice(
+                0,
+                CONFIG.MAX_MATCH_FEATURES
+            );
+        }
+
+        return matches;
+    }
+
+    /* ----------------------------------------------------------
+       AFFINE MODEL
+       ---------------------------------------------------------- */
+
+    function solveAffine(points) {
+        if (!points || points.length < 3) {
+            return null;
+        }
+
+        const A = [];
+        const B = [];
+
+        for (const p of points) {
+            const x = p.x;
+            const y = p.y;
+            const X = p.X;
+            const Y = p.Y;
+
+            A.push([
+                x, y, 1, 0, 0, 0
+            ]);
+
+            B.push(X);
+
+            A.push([
+                0, 0, 0, x, y, 1
+            ]);
+
+            B.push(Y);
+        }
+
+        const ATA =
+            Array.from(
+                { length: 6 },
+                () => Array(6).fill(0)
+            );
+
+        const ATB =
+            Array(6).fill(0);
+
+        for (let r = 0; r < A.length; r++) {
+            for (let c = 0; c < 6; c++) {
+                ATB[c] +=
+                    A[r][c] * B[r];
+
+                for (let k = 0; k < 6; k++) {
+                    ATA[c][k] +=
+                        A[r][c] * A[r][k];
+                }
             }
         }
 
-        await delay(0);
+        /* Gaussian elimination */
 
-        return {
-            matches: filtered,
-            mode
-        };
-    }
+        const M =
+            ATA.map(
+                (row, i) =>
+                    row.concat(ATB[i])
+            );
 
-    /* ============================================================
-       AFFINE MODEL
-       ============================================================ */
-
-    function solveAffine(
-        p1,
-        p2,
-        p3,
-        q1,
-        q2,
-        q3
-    ) {
-        const matrix = [
-            [
-                p1.x,
-                p1.y,
-                1,
-                0,
-                0,
-                0
-            ],
-            [
-                0,
-                0,
-                0,
-                p1.x,
-                p1.y,
-                1
-            ],
-            [
-                p2.x,
-                p2.y,
-                1,
-                0,
-                0,
-                0
-            ],
-            [
-                0,
-                0,
-                0,
-                p2.x,
-                p2.y,
-                1
-            ],
-            [
-                p3.x,
-                p3.y,
-                1,
-                0,
-                0,
-                0
-            ],
-            [
-                0,
-                0,
-                0,
-                p3.x,
-                p3.y,
-                1
-            ]
-        ];
-
-        const values = [
-            q1.x,
-            q1.y,
-            q2.x,
-            q2.y,
-            q3.x,
-            q3.y
-        ];
-
-        /*
-         * Gaussian elimination.
-         */
         for (let col = 0; col < 6; col++) {
             let pivot = col;
 
@@ -1695,95 +1063,85 @@
                 row++
             ) {
                 if (
-                    Math.abs(
-                        matrix[row][col]
-                    ) >
-                    Math.abs(
-                        matrix[pivot][col]
-                    )
+                    Math.abs(M[row][col]) >
+                    Math.abs(M[pivot][col])
                 ) {
                     pivot = row;
                 }
             }
 
             if (
-                Math.abs(
-                    matrix[pivot][col]
-                ) < 1e-9
+                Math.abs(M[pivot][col]) <
+                1e-10
             ) {
                 return null;
             }
 
-            [
-                matrix[col],
-                matrix[pivot]
-            ] = [
-                matrix[pivot],
-                matrix[col]
-            ];
+            [M[col], M[pivot]] =
+                [M[pivot], M[col]];
 
-            [
-                values[col],
-                values[pivot]
-            ] = [
-                values[pivot],
-                values[col]
-            ];
+            const div =
+                M[col][col];
 
-            const divisor =
-                matrix[col][col];
-
-            for (let j = col; j < 6; j++) {
-                matrix[col][j] /= divisor;
+            for (
+                let j = col;
+                j <= 6;
+                j++
+            ) {
+                M[col][j] /= div;
             }
 
-            values[col] /= divisor;
-
-            for (let row = 0; row < 6; row++) {
+            for (
+                let row = 0;
+                row < 6;
+                row++
+            ) {
                 if (row === col) continue;
 
                 const factor =
-                    matrix[row][col];
+                    M[row][col];
 
                 for (
                     let j = col;
-                    j < 6;
+                    j <= 6;
                     j++
                 ) {
-                    matrix[row][j] -=
-                        factor *
-                        matrix[col][j];
+                    M[row][j] -=
+                        factor * M[col][j];
                 }
-
-                values[row] -=
-                    factor *
-                    values[col];
             }
         }
 
+        const x =
+            M.map(row => row[6]);
+
         return {
-            a: values[0],
-            b: values[1],
-            c: values[2],
-            d: values[3],
-            e: values[4],
-            f: values[5]
+            a: x[0],
+            b: x[1],
+            c: x[2],
+            d: x[3],
+            e: x[4],
+            f: x[5]
         };
     }
 
-    function transform(model, point) {
+    function transform(model, x, y) {
         return {
             x:
-                model.a * point.x +
-                model.b * point.y +
+                model.a * x +
+                model.b * y +
                 model.c,
 
             y:
-                model.d * point.x +
-                model.e * point.y +
+                model.d * x +
+                model.e * y +
                 model.f
         };
     }
+
+    /* ----------------------------------------------------------
+       GEOMETRY HELPERS
+       ---------------------------------------------------------- */
 
     function triangleArea(a, b, c) {
         return Math.abs(
@@ -1791,18 +1149,14 @@
                 a.x * (b.y - c.y) +
                 b.x * (c.y - a.y) +
                 c.x * (a.y - b.y)
-            ) * 0.5
+            ) / 2
         );
     }
 
-    /* ============================================================
-       GEOMETRIC VERIFICATION
-       ============================================================ */
-
     function verifyGeometry(
-        matches,
-        imageA,
-        imageB
+        featuresA,
+        featuresB,
+        matches
     ) {
         if (
             matches.length <
@@ -1811,116 +1165,87 @@
             return {
                 model: null,
                 inliers: [],
-                ratio: 0,
-                meanError: Infinity,
-                medianError: Infinity,
-                consistency: 0
+                inlierRatio: 0,
+                consistency: 0,
+                status: "INSUFFICIENT MATCHES"
             };
         }
 
-        /*
-         * Threshold adapts to working image dimensions.
-         */
-        const scale =
-            Math.max(
-                imageA.width,
-                imageA.height,
-                imageB.width,
-                imageB.height
-            ) / 700;
-
-        const threshold =
-            clamp(
-                CONFIG.RANSAC_ERROR_PIXELS * scale,
-                7,
-                14
-            );
+        const usable =
+            matches.map(m => ({
+                x: featuresA[m.indexA].x,
+                y: featuresA[m.indexA].y,
+                X: featuresB[m.indexB].x,
+                Y: featuresB[m.indexB].y,
+                match: m
+            }));
 
         let bestModel = null;
         let bestInliers = [];
-        let bestError = Infinity;
+
+        const iterations =
+            Math.min(
+                CONFIG.RANSAC_ITERATIONS,
+                Math.max(
+                    250,
+                    usable.length * 25
+                )
+            );
 
         for (
-            let iteration = 0;
-            iteration < CONFIG.RANSAC_ITERATIONS;
-            iteration++
+            let iter = 0;
+            iter < iterations;
+            iter++
         ) {
-            const n = matches.length;
+            const chosen = [];
 
-            const i1 =
-                Math.floor(Math.random() * n);
+            while (chosen.length < 3) {
+                const index =
+                    Math.floor(
+                        Math.random() *
+                        usable.length
+                    );
 
-            let i2 =
-                Math.floor(Math.random() * n);
-
-            let i3 =
-                Math.floor(Math.random() * n);
-
-            if (
-                i1 === i2 ||
-                i1 === i3 ||
-                i2 === i3
-            ) {
-                continue;
+                if (!chosen.includes(index)) {
+                    chosen.push(index);
+                }
             }
 
-            const m1 = matches[i1];
-            const m2 = matches[i2];
-            const m3 = matches[i3];
-
-            /*
-             * Reject degenerate triangles.
-             */
-            const areaA =
-                triangleArea(
-                    m1.a,
-                    m2.a,
-                    m3.a
-                );
-
-            const areaB =
-                triangleArea(
-                    m1.b,
-                    m2.b,
-                    m3.b
-                );
+            const points =
+                chosen.map(i => usable[i]);
 
             if (
-                areaA < 3 ||
-                areaB < 3
+                triangleArea(
+                    points[0],
+                    points[1],
+                    points[2]
+                ) < 2
             ) {
                 continue;
             }
 
             const model =
-                solveAffine(
-                    m1.a,
-                    m2.a,
-                    m3.a,
-                    m1.b,
-                    m2.b,
-                    m3.b
-                );
+                solveAffine(points);
 
             if (!model) continue;
 
             const inliers = [];
-            let totalError = 0;
 
-            for (const match of matches) {
+            for (let i = 0; i < usable.length; i++) {
+                const p = usable[i];
+
                 const predicted =
                     transform(
                         model,
-                        match.a
+                        p.x,
+                        p.y
                     );
 
                 const dx =
-                    predicted.x -
-                    match.b.x;
+                    predicted.x - p.X;
 
                 const dy =
-                    predicted.y -
-                    match.b.y;
+                    predicted.y - p.Y;
 
                 const error =
                     Math.sqrt(
@@ -1928,195 +1253,79 @@
                         dy * dy
                     );
 
-                if (error <= threshold) {
+                if (
+                    error <=
+                    CONFIG.RANSAC_ERROR_PIXELS
+                ) {
                     inliers.push({
-                        ...match,
+                        index: i,
                         error
                     });
-
-                    totalError += error;
                 }
             }
 
-            if (!inliers.length) continue;
-
-            const meanError =
-                totalError /
-                inliers.length;
-
-            const better =
+            if (
                 inliers.length >
-                    bestInliers.length ||
-                (
-                    inliers.length ===
-                        bestInliers.length &&
-                    meanError < bestError
-                );
-
-            if (better) {
+                bestInliers.length
+            ) {
                 bestModel = model;
                 bestInliers = inliers;
-                bestError = meanError;
-            }
 
-            const ratio =
-                inliers.length /
-                matches.length;
+                const ratio =
+                    bestInliers.length /
+                    usable.length;
 
-            /*
-             * Early termination once we have a very
-             * convincing model.
-             */
-            if (
-                inliers.length >= 20 &&
-                ratio >=
+                if (
+                    ratio >=
                     CONFIG.EARLY_RANSAC_INLIER_RATIO
-            ) {
-                break;
+                ) {
+                    break;
+                }
             }
         }
 
-        if (
-            !bestModel ||
-            bestInliers.length < 3
-        ) {
+        if (!bestModel) {
             return {
-                model: bestModel,
-                inliers: bestInliers,
-                ratio:
-                    matches.length
-                        ? bestInliers.length /
-                          matches.length
-                        : 0,
-                meanError: Infinity,
-                medianError: Infinity,
-                consistency: 0
+                model: null,
+                inliers: [],
+                inlierRatio: 0,
+                consistency: 0,
+                status: "NO VALID GEOMETRY"
             };
         }
 
-        /*
-         * Refit using all current inliers.
-         * This stabilizes the affine model.
-         */
-        if (bestInliers.length >= 3) {
-            const base =
-                bestInliers;
+        /* Refine model using all inliers. */
 
-            /*
-             * Use several random triplets and choose the
-             * least-error refined model.
-             */
-            let refinedModel =
-                bestModel;
+        const refinedPoints =
+            bestInliers.map(
+                item => usable[item.index]
+            );
 
-            if (base.length >= 6) {
-                let bestRefinedError =
-                    Infinity;
+        const refinedModel =
+            refinedPoints.length >= 3
+                ? solveAffine(refinedPoints)
+                : bestModel;
 
-                for (
-                    let k = 0;
-                    k < Math.min(20, base.length * 2);
-                    k++
-                ) {
-                    const i1 =
-                        Math.floor(
-                            Math.random() *
-                            base.length
-                        );
+        const model =
+            refinedModel || bestModel;
 
-                    let i2 =
-                        Math.floor(
-                            Math.random() *
-                            base.length
-                        );
+        let finalInliers = [];
 
-                    let i3 =
-                        Math.floor(
-                            Math.random() *
-                            base.length
-                        );
+        for (let i = 0; i < usable.length; i++) {
+            const p = usable[i];
 
-                    if (
-                        i1 === i2 ||
-                        i1 === i3 ||
-                        i2 === i3
-                    ) {
-                        continue;
-                    }
-
-                    const candidate =
-                        solveAffine(
-                            base[i1].a,
-                            base[i2].a,
-                            base[i3].a,
-                            base[i1].b,
-                            base[i2].b,
-                            base[i3].b
-                        );
-
-                    if (!candidate) continue;
-
-                    let errorSum = 0;
-
-                    for (const m of base) {
-                        const p =
-                            transform(
-                                candidate,
-                                m.a
-                            );
-
-                        const dx =
-                            p.x - m.b.x;
-
-                        const dy =
-                            p.y - m.b.y;
-
-                        errorSum +=
-                            Math.sqrt(
-                                dx * dx +
-                                dy * dy
-                            );
-                    }
-
-                    const average =
-                        errorSum /
-                        base.length;
-
-                    if (
-                        average <
-                        bestRefinedError
-                    ) {
-                        bestRefinedError =
-                            average;
-
-                        refinedModel =
-                            candidate;
-                    }
-                }
-            }
-
-            bestModel =
-                refinedModel;
-        }
-
-        /*
-         * Recalculate inliers using refined model.
-         */
-        const refinedInliers = [];
-        const errors = [];
-
-        for (const match of matches) {
             const predicted =
                 transform(
-                    bestModel,
-                    match.a
+                    model,
+                    p.x,
+                    p.y
                 );
 
             const dx =
-                predicted.x - match.b.x;
+                predicted.x - p.X;
 
             const dy =
-                predicted.y - match.b.y;
+                predicted.y - p.Y;
 
             const error =
                 Math.sqrt(
@@ -2124,877 +1333,662 @@
                     dy * dy
                 );
 
-            if (error <= threshold) {
-                refinedInliers.push({
-                    ...match,
+            if (
+                error <=
+                CONFIG.RANSAC_ERROR_PIXELS
+            ) {
+                finalInliers.push({
+                    index: i,
                     error
                 });
-
-                errors.push(error);
             }
         }
 
-        errors.sort((a, b) => a - b);
+        const inlierRatio =
+            finalInliers.length /
+            Math.max(1, usable.length);
 
         const meanError =
-            errors.length
-                ? errors.reduce(
-                    (a, b) => a + b,
-                    0
-                ) / errors.length
+            finalInliers.length
+                ? finalInliers.reduce(
+                      (sum, item) =>
+                          sum + item.error,
+                      0
+                  ) /
+                  finalInliers.length
                 : Infinity;
 
-        const medianError =
-            errors.length
-                ? errors[
-                    Math.floor(
-                        errors.length / 2
+        const consistency =
+            clamp(
+                inlierRatio *
+                Math.exp(
+                    -meanError /
+                    Math.max(
+                        1,
+                        CONFIG.RANSAC_ERROR_PIXELS
                     )
-                ]
-                : Infinity;
-
-        const ratio =
-            matches.length
-                ? refinedInliers.length /
-                  matches.length
-                : 0;
-
-        const consistency =
-            Number.isFinite(meanError)
-                ? clamp(
-                    100 -
-                    meanError * 10 -
-                    medianError * 4,
-                    0,
-                    100
-                )
-                : 0;
-
-        return {
-            model: bestModel,
-            inliers: refinedInliers,
-            ratio,
-            meanError,
-            medianError,
-            consistency
-        };
-    }
-
-    /* ============================================================
-       COVERAGE
-       ============================================================ */
-
-    function calculateCoverage(
-        inliers,
-        image
-    ) {
-        if (!inliers.length) return 0;
-
-        const occupied =
-            new Set();
-
-        const cols = 4;
-        const rows = 4;
-
-        for (const match of inliers) {
-            const col =
-                clamp(
-                    Math.floor(
-                        (match.a.x /
-                            image.width) *
-                        cols
-                    ),
-                    0,
-                    cols - 1
-                );
-
-            const row =
-                clamp(
-                    Math.floor(
-                        (match.a.y /
-                            image.height) *
-                        rows
-                    ),
-                    0,
-                    rows - 1
-                );
-
-            occupied.add(
-                row * cols + col
-            );
-        }
-
-        return (
-            occupied.size /
-            (rows * cols)
-        ) * 100;
-    }
-
-    /* ============================================================
-       MATCH QUALITY
-       ============================================================ */
-
-    function calculateMatchQuality(matches) {
-        if (!matches.length) return 0;
-
-        let sum = 0;
-
-        for (const match of matches) {
-            const distanceScore =
-                clamp(
-                    1 -
-                    match.distance /
-                    CONFIG.RELAXED_DESCRIPTOR_DISTANCE,
-                    0,
-                    1
-                );
-
-            const ratioScore =
-                clamp(
-                    1 -
-                    match.ratio,
-                    0,
-                    1
-                );
-
-            sum +=
-                distanceScore * 0.65 +
-                ratioScore * 0.35;
-        }
-
-        return (
-            sum /
-            matches.length
-        ) * 100;
-    }
-
-    /* ============================================================
-       SCORE
-       ============================================================ */
-
-    function calculateScore(
-        featuresA,
-        featuresB,
-        matches,
-        verification,
-        qualityA,
-        qualityB,
-        matchingMode
-    ) {
-        const verified =
-            verification.inliers.length;
-
-        const candidates =
-            matches.length;
-
-        const featureBase =
-            Math.max(
-                1,
-                Math.min(
-                    featuresA.length,
-                    featuresB.length
-                )
-            );
-
-        const density =
-            clamp(
-                (verified /
-                    featureBase) *
-                500,
+                ),
                 0,
-                100
+                1
             );
-
-        const geometric =
-            clamp(
-                verification.ratio * 150,
-                0,
-                100
-            );
-
-        const consistency =
-            verification.consistency;
-
-        const coverage =
-            calculateCoverage(
-                verification.inliers,
-                {
-                    width: 700,
-                    height: 700
-                }
-            );
-
-        const matchQuality =
-            calculateMatchQuality(
-                verification.inliers.length
-                    ? verification.inliers
-                    : matches
-            );
-
-        const imageQuality =
-            (
-                qualityA.qualityScore +
-                qualityB.qualityScore
-            ) / 2;
-
-        /*
-         * Candidate abundance is useful, but it should
-         * never overpower geometric evidence.
-         */
-        const candidateSupport =
-            clamp(
-                candidates / 25 * 100,
-                0,
-                100
-            );
-
-        let score =
-            density * 0.27 +
-            geometric * 0.25 +
-            consistency * 0.18 +
-            coverage * 0.10 +
-            matchQuality * 0.12 +
-            imageQuality * 0.05 +
-            candidateSupport * 0.03;
-
-        /*
-         * Relaxed matching gets a small evidence penalty.
-         * This prevents relaxed matches from being treated
-         * as equally trustworthy as strict matches.
-         */
-        if (matchingMode === "RELAXED") {
-            score *= 0.94;
-        }
-
-        /*
-         * Strong evidence floor:
-         * a result cannot become strong merely because
-         * the images are high quality.
-         */
-        if (verified < 6) {
-            score = Math.min(score, 44);
-        } else if (verified < 10) {
-            score = Math.min(score, 59);
-        }
-
-        const strong =
-            verified >= 20 &&
-            score >= 78 &&
-            verification.ratio >= 0.35 &&
-            verification.consistency >= 75;
-
-        const found =
-            verified >= 10 &&
-            score >= 60 &&
-            verification.ratio >= 0.25;
-
-        const possible =
-            verified >= 6 &&
-            score >= 45 &&
-            coverage >= 18;
 
         let status =
-            "NO RELIABLE CORRESPONDENCE";
+            "GEOMETRICALLY CONSISTENT";
 
-        let confidence =
-            "LOW";
-
-        if (strong) {
-            status = "STRONG CORRESPONDENCE";
-            confidence = "HIGH";
-        } else if (found) {
-            status = "CORRESPONDENCE FOUND";
-            confidence = "MODERATE";
-        } else if (possible) {
-            status = "POSSIBLE CORRESPONDENCE";
-            confidence = "LOW";
+        if (
+            finalInliers.length <
+            CONFIG.MIN_VERIFIED_MATCHES
+        ) {
+            status =
+                "VERIFICATION INSUFFICIENT INLIERS";
         }
 
         return {
-            score: clamp(score, 0, 100),
-            status,
-            confidence,
-
-            density,
-            geometric,
+            model,
+            inliers: finalInliers,
+            inlierRatio,
             consistency,
-            coverage,
-            matchQuality,
-            imageQuality,
-            candidateSupport,
-
-            strong,
-            found,
-            possible
+            status,
+            usable
         };
     }
 
-    /* ============================================================
-       INTERPRETATION
-       ============================================================ */
+    /* ----------------------------------------------------------
+       COVERAGE
+       ---------------------------------------------------------- */
 
-    function buildInterpretation(
-        scored,
+    function calculateCoverage(
         featuresA,
         featuresB,
-        matches,
-        verification,
-        matchingMode
+        verifiedMatches
     ) {
-        const verified =
-            verification.inliers.length;
+        if (!verifiedMatches.length) {
+            return 0;
+        }
 
-        const candidates =
-            matches.length;
+        const cells = new Set();
 
-        if (scored.strong) {
-            return (
-                `Strong lunar correspondence established. ` +
-                `${verified} feature correspondences remain geometrically consistent ` +
-                `after affine RANSAC verification, with a ${(verification.ratio * 100).toFixed(1)}% ` +
-                `inlier ratio. The correspondence is supported by spatial coverage and descriptor agreement.`
+        const rows = CONFIG.GRID_ROWS;
+        const cols = CONFIG.GRID_COLS;
+
+        for (const item of verifiedMatches) {
+            const p = featuresA[item.match.indexA];
+
+            const col = clamp(
+                Math.floor(
+                    p.x /
+                    Math.max(
+                        1,
+                        featuresA.imageWidth || 1
+                    ) *
+                    cols
+                ),
+                0,
+                cols - 1
+            );
+
+            const row = clamp(
+                Math.floor(
+                    p.y /
+                    Math.max(
+                        1,
+                        featuresA.imageHeight || 1
+                    ) *
+                    rows
+                ),
+                0,
+                rows - 1
+            );
+
+            cells.add(
+                `${row}:${col}`
             );
         }
 
-        if (scored.found) {
-            return (
-                `Reliable lunar correspondence detected. ` +
-                `${verified} verified features support a consistent affine relationship ` +
-                `between the two images. The evidence is sufficient for a moderate-confidence match.`
-            );
-        }
-
-        if (scored.possible) {
-            return (
-                `Possible lunar correspondence detected. ` +
-                `${verified} features survived geometric verification from ${candidates} candidate matches. ` +
-                `The geometric evidence is promising but remains below the threshold required for a reliable match.`
-            );
-        }
-
-        if (matchingMode === "RELAXED") {
-            return (
-                `The engine detected limited feature agreement using a controlled relaxed matching pass. ` +
-                `${featuresA.length} and ${featuresB.length} features were available, but only ` +
-                `${verified} correspondences survived geometric verification. ` +
-                `More verified features are required before the correspondence can be considered reliable.`
-            );
-        }
-
-        return (
-            `The images contain sufficient visual structure for analysis, but the current ` +
-            `correspondence evidence is too sparse to establish a reliable relationship. ` +
-            `${featuresA.length} and ${featuresB.length} local features were detected, ` +
-            `while ${candidates} candidate correspondences were generated and ` +
-            `${verified} survived geometric verification.`
+        return clamp(
+            cells.size /
+            (rows * cols),
+            0,
+            1
         );
     }
 
-    /* ============================================================
-       CORRESPONDENCE VISUALIZATION
-       ============================================================ */
+    /* ----------------------------------------------------------
+       MATCH QUALITY
+       ---------------------------------------------------------- */
+
+    function calculateMatchQuality(
+        matches,
+        verified
+    ) {
+        if (!matches.length) {
+            return 0;
+        }
+
+        const verifiedSet =
+            new Set(
+                verified.map(
+                    item => item.index
+                )
+            );
+
+        const good =
+            matches.filter(
+                (_, i) =>
+                    verifiedSet.has(i)
+            );
+
+        if (!good.length) {
+            return 0;
+        }
+
+        const averageDistance =
+            good.reduce(
+                (sum, item) =>
+                    sum + item.distance,
+                0
+            ) / good.length;
+
+        const descriptorQuality =
+            clamp(
+                1 -
+                averageDistance /
+                CONFIG.RELAXED_DESCRIPTOR_DISTANCE,
+                0,
+                1
+            );
+
+        const ratioQuality =
+            good.reduce(
+                (sum, item) =>
+                    sum +
+                    clamp(
+                        1 -
+                        item.ratio,
+                        0,
+                        1
+                    ),
+                0
+            ) /
+            good.length;
+
+        return clamp(
+            0.65 * descriptorQuality +
+            0.35 * ratioQuality,
+            0,
+            1
+        );
+    }
+
+    /* ----------------------------------------------------------
+       SCORE
+       ---------------------------------------------------------- */
+
+    function calculateScore({
+        qualityA,
+        qualityB,
+        matches,
+        verifiedMatches,
+        inlierRatio,
+        geometryConsistency,
+        coverage,
+        matchQuality
+    }) {
+        const imageQualityScore =
+            (
+                qualityA +
+                qualityB
+            ) / 200;
+
+        const evidenceScore =
+            clamp(
+                verifiedMatches /
+                Math.max(
+                    CONFIG.MIN_VERIFIED_MATCHES,
+                    12
+                ),
+                0,
+                1
+            );
+
+        const score =
+            100 *
+            (
+                0.12 * imageQualityScore +
+                0.30 * inlierRatio +
+                0.25 * geometryConsistency +
+                0.13 * coverage +
+                0.15 * matchQuality +
+                0.05 * evidenceScore
+            );
+
+        return clamp(
+            Math.round(score),
+            0,
+            100
+        );
+    }
+
+    /* ----------------------------------------------------------
+       CONFIDENCE
+       ---------------------------------------------------------- */
+
+    function calculateConfidence({
+        score,
+        verifiedMatches,
+        inlierRatio,
+        geometryConsistency,
+        coverage,
+        matchQuality
+    }) {
+        /*
+         * Confidence is evidence-based.
+         * It is NOT artificially increased just to make
+         * the result look better.
+         */
+
+        const evidence =
+            clamp(
+                verifiedMatches / 20,
+                0,
+                1
+            );
+
+        const confidence =
+            100 *
+            (
+                0.24 * evidence +
+                0.24 * inlierRatio +
+                0.22 * geometryConsistency +
+                0.15 * coverage +
+                0.15 * matchQuality
+            );
+
+        const finalConfidence =
+            clamp(
+                0.75 * confidence +
+                0.25 * score,
+                0,
+                100
+            );
+
+        let label = "LOW";
+
+        if (finalConfidence >= 75) {
+            label = "HIGH";
+        } else if (finalConfidence >= 50) {
+            label = "MEDIUM";
+        }
+
+        return {
+            value: Math.round(finalConfidence),
+            label
+        };
+    }
+
+    /* ----------------------------------------------------------
+       INTERPRETATION
+       ---------------------------------------------------------- */
+
+    function buildInterpretation(result) {
+        const {
+            score,
+            confidence,
+            verifiedMatches,
+            inlierRatio,
+            geometryConsistency,
+            coverage
+        } = result;
+
+        if (
+            verifiedMatches >= 10 &&
+            inlierRatio >= 0.60 &&
+            geometryConsistency >= 0.50
+        ) {
+            return (
+                `STRONG CORRESPONDENCE DETECTED. ` +
+                `${verifiedMatches} geometrically verified features ` +
+                `support a consistent spatial relationship between the ` +
+                `two lunar images. Overall correspondence score: ${score}%. ` +
+                `Confidence: ${confidence.label} (${confidence.value}%).`
+            );
+        }
+
+        if (
+            verifiedMatches >= 6 &&
+            inlierRatio >= 0.45
+        ) {
+            return (
+                `PROMISING CORRESPONDENCE. ` +
+                `The engine identified ${verifiedMatches} verified ` +
+                `feature correspondences with measurable geometric ` +
+                `consistency. Additional imagery or stronger overlap ` +
+                `would increase confidence.`
+            );
+        }
+
+        if (
+            verifiedMatches >= 3 &&
+            geometryConsistency >= 0.35
+        ) {
+            return (
+                `WEAK BUT POSSIBLE CORRESPONDENCE. ` +
+                `Some compatible image structure was detected, but the ` +
+                `available evidence is not yet strong enough for a reliable ` +
+                `identification.`
+            );
+        }
+
+        return (
+            `NO RELIABLE CORRESPONDENCE ESTABLISHED. ` +
+            `The image quality may be sufficient, but the current feature ` +
+            `evidence does not provide enough geometrically verified matches.`
+        );
+    }
+
+    /* ----------------------------------------------------------
+       CORRESPONDENCE MAP
+       ---------------------------------------------------------- */
 
     function createCorrespondenceMap(
-        sourceA,
-        sourceB,
-        workA,
-        workB,
-        inliers
+        imageA,
+        imageB,
+        featuresA,
+        featuresB,
+        verifiedMatches
     ) {
         const container =
             $("correspondenceMap");
 
+        const placeholder =
+            $("correspondencePlaceholder");
+
         if (!container) return;
 
         container.innerHTML = "";
+        container.style.display = "block";
 
-        const maxWidth = 1200;
-
-        const totalWidth =
-            Math.min(
-                maxWidth,
-                sourceA.width +
-                sourceB.width
-            );
-
-        const leftWidth =
-            totalWidth *
-            (
-                sourceA.width /
-                (sourceA.width +
-                    sourceB.width)
-            );
-
-        const rightWidth =
-            totalWidth -
-            leftWidth;
-
-        const maxHeight =
-            Math.max(
-                sourceA.height,
-                sourceB.height
-            );
-
-        const scale =
-            Math.min(
-                1,
-                maxWidth /
-                (
-                    sourceA.width +
-                    sourceB.width
-                )
-            );
+        if (placeholder) {
+            placeholder.style.display = "none";
+        }
 
         const canvas =
             document.createElement("canvas");
 
-        canvas.width =
-            Math.round(
-                (
-                    sourceA.width +
-                    sourceB.width
-                ) * scale
-            );
-
-        canvas.height =
-            Math.round(
-                maxHeight * scale
-            );
+        canvas.width = 1000;
+        canvas.height = 500;
 
         canvas.style.width = "100%";
         canvas.style.height = "auto";
 
+        container.appendChild(canvas);
+
         const ctx =
             canvas.getContext("2d");
 
-        const canvasA =
-            document.createElement("canvas");
+        const halfWidth =
+            canvas.width / 2;
 
-        canvasA.width =
-            sourceA.width;
+        const scaleA =
+            Math.min(
+                halfWidth / imageA.width,
+                canvas.height / imageA.height
+            );
 
-        canvasA.height =
-            sourceA.height;
+        const scaleB =
+            Math.min(
+                halfWidth / imageB.width,
+                canvas.height / imageB.height
+            );
 
-        const ctxA =
-            canvasA.getContext("2d");
+        const offsetAY =
+            (canvas.height -
+                imageA.height * scaleA) / 2;
 
-        const canvasB =
-            document.createElement("canvas");
+        const offsetBY =
+            (canvas.height -
+                imageB.height * scaleB) / 2;
 
-        canvasB.width =
-            sourceB.width;
-
-        canvasB.height =
-            sourceB.height;
-
-        const ctxB =
-            canvasB.getContext("2d");
-
-        /*
-         * Convert grayscale arrays to display images.
-         */
         function drawGray(
             image,
-            ctxTarget
+            xOffset,
+            scale,
+            yOffset
         ) {
-            const imageData =
-                ctxTarget.createImageData(
+            const temp =
+                document.createElement("canvas");
+
+            temp.width = image.width;
+            temp.height = image.height;
+
+            const tctx =
+                temp.getContext("2d");
+
+            const pixels =
+                tctx.createImageData(
                     image.width,
                     image.height
                 );
 
             for (
                 let i = 0, p = 0;
-                i < image.data.length;
-                i++, p += 4
+                i < pixels.data.length;
+                i += 4, p++
             ) {
                 const value =
-                    clamp(
-                        Math.round(
-                            image.data[i]
-                        ),
-                        0,
-                        255
+                    Math.round(
+                        clamp(
+                            image.data[p],
+                            0,
+                            255
+                        )
                     );
 
-                imageData.data[p] =
-                    value;
-
-                imageData.data[p + 1] =
-                    value;
-
-                imageData.data[p + 2] =
-                    value;
-
-                imageData.data[p + 3] =
-                    255;
+                pixels.data[i] = value;
+                pixels.data[i + 1] = value;
+                pixels.data[i + 2] = value;
+                pixels.data[i + 3] = 255;
             }
 
-            ctxTarget.putImageData(
-                imageData,
+            tctx.putImageData(
+                pixels,
                 0,
                 0
             );
+
+            ctx.drawImage(
+                temp,
+                xOffset,
+                yOffset,
+                image.width * scale,
+                image.height * scale
+            );
         }
 
-        drawGray(sourceA, ctxA);
-        drawGray(sourceB, ctxB);
-
-        ctx.drawImage(
-            canvasA,
+        drawGray(
+            imageA,
             0,
-            0,
-            sourceA.width * scale,
-            sourceA.height * scale
+            scaleA,
+            offsetAY
         );
 
-        const offsetX =
-            sourceA.width * scale;
-
-        ctx.drawImage(
-            canvasB,
-            offsetX,
-            0,
-            sourceB.width * scale,
-            sourceB.height * scale
+        drawGray(
+            imageB,
+            halfWidth,
+            scaleB,
+            offsetBY
         );
 
-        /*
-         * Feature coordinates come from work images,
-         * while the display uses source images.
-         * Correct the coordinate scale here.
-         */
-        const scaleAX =
-            sourceA.width /
-            workA.width;
+        for (
+            let i = 0;
+            i < verifiedMatches.length &&
+            i < CONFIG.MAX_VISUAL_MATCHES;
+            i++
+        ) {
+            const item =
+                verifiedMatches[i];
 
-        const scaleAY =
-            sourceA.height /
-            workA.height;
+            const fa =
+                featuresA[item.match.indexA];
 
-        const scaleBX =
-            sourceB.width /
-            workB.width;
+            const fb =
+                featuresB[item.match.indexB];
 
-        const scaleBY =
-            sourceB.height /
-            workB.height;
-
-        ctx.lineWidth = 1.2;
-
-        const displayMatches =
-            inliers
-                .slice()
-                .sort(
-                    (a, b) =>
-                        a.error - b.error
-                )
-                .slice(
-                    0,
-                    CONFIG.MAX_VISUAL_MATCHES
-                );
-
-        for (const match of displayMatches) {
             const ax =
-                match.a.x *
-                scaleAX *
-                scale;
+                fa.x * scaleA;
 
             const ay =
-                match.a.y *
-                scaleAY *
-                scale;
+                offsetAY +
+                fa.y * scaleA;
 
             const bx =
-                offsetX +
-                match.b.x *
-                scaleBX *
-                scale;
+                halfWidth +
+                fb.x * scaleB;
 
             const by =
-                match.b.y *
-                scaleBY *
-                scale;
+                offsetBY +
+                fb.y * scaleB;
 
             ctx.beginPath();
             ctx.moveTo(ax, ay);
             ctx.lineTo(bx, by);
+
+            ctx.globalAlpha =
+                0.18 +
+                0.55 *
+                clamp(
+                    1 -
+                    item.error /
+                    CONFIG.RANSAC_ERROR_PIXELS,
+                    0,
+                    1
+                );
+
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 1;
+
             ctx.stroke();
+
+            ctx.globalAlpha = 1;
 
             ctx.beginPath();
             ctx.arc(
                 ax,
                 ay,
-                2.4,
+                3,
                 0,
                 Math.PI * 2
             );
+
+            ctx.fillStyle = "#ffffff";
             ctx.fill();
 
             ctx.beginPath();
             ctx.arc(
                 bx,
                 by,
-                2.4,
+                3,
                 0,
                 Math.PI * 2
             );
+
+            ctx.fillStyle = "#ffffff";
             ctx.fill();
         }
 
-        container.appendChild(canvas);
-        container.style.display = "";
+        ctx.globalAlpha = 1;
     }
 
-    /* ============================================================
+    /* ----------------------------------------------------------
        DISPLAY RESULTS
-       ============================================================ */
+       ---------------------------------------------------------- */
 
     function displayResults(result) {
-        const {
-            scored,
-            processingMs,
-            qualityA,
-            qualityB,
-            featuresA,
-            featuresB,
-            matches,
-            verification,
-            matchingMode
-        } = result;
-
         setText(
-            "status",
-            scored.status
-        );
-
-        setText(
-            "score",
-            `${Math.round(scored.score)}%`
-        );
-
-        setText(
-            "features",
-            `${featuresA.length} / ${featuresB.length}`
+            "overallScore",
+            `${result.score}%`
         );
 
         setText(
             "confidence",
-            scored.confidence
+            `${result.confidence.label} (${result.confidence.value}%)`
         );
 
         setText(
-            "quality",
-            `${Math.round(
-                (
-                    qualityA.qualityScore +
-                    qualityB.qualityScore
-                ) / 2
-            )}/100`
+            "verifiedFeatures",
+            result.verifiedMatches
         );
 
         setText(
-            "time",
-            formatTime(processingMs)
-        );
-
-        /* ---------------- IMAGE A ---------------- */
-
-        setText(
-            "resolutionA",
-            `${result.imageA.width} × ${result.imageA.height}`
+            "imageQuality",
+            `${round(result.averageQuality, 1)}%`
         );
 
         setText(
-            "keypointsA",
-            featuresA.length
+            "processTime",
+            formatTime(result.processTime)
         );
-
-        setText(
-            "contrastA",
-            round(
-                qualityA.contrast,
-                2
-            )
-        );
-
-        setText(
-            "sharpnessA",
-            round(
-                qualityA.sharpness,
-                2
-            )
-        );
-
-        setText(
-            "qualityScoreA",
-            `${round(
-                qualityA.qualityScore,
-                1
-            )}/100`
-        );
-
-        /* ---------------- IMAGE B ---------------- */
-
-        setText(
-            "resolutionB",
-            `${result.imageB.width} × ${result.imageB.height}`
-        );
-
-        setText(
-            "keypointsB",
-            featuresB.length
-        );
-
-        setText(
-            "contrastB",
-            round(
-                qualityB.contrast,
-                2
-            )
-        );
-
-        setText(
-            "sharpnessB",
-            round(
-                qualityB.sharpness,
-                2
-            )
-        );
-
-        setText(
-            "qualityScoreB",
-            `${round(
-                qualityB.qualityScore,
-                1
-            )}/100`
-        );
-
-        /* ---------------- MATCHING ---------------- */
 
         setText(
             "rawMatches",
-            result.rawFeatureComparisons
+            result.rawMatches
         );
 
         setText(
             "candidateMatches",
-            matches.length
+            result.candidateMatches
         );
-
-        setText(
-            "verifiedMatches",
-            verification.inliers.length
-        );
-
-        const coverage =
-            calculateCoverage(
-                verification.inliers,
-                result.workA
-            );
 
         setText(
             "featureCoverage",
-            `${round(
-                coverage,
-                0
-            )}%`
+            `${round(result.coverage * 100, 1)}%`
         );
 
         setText(
             "correspondenceStrength",
-            `${round(
-                (
-                    verification.inliers.length /
-                    Math.max(
-                        1,
-                        Math.min(
-                            featuresA.length,
-                            featuresB.length
-                        )
-                    )
-                ) * 100,
-                1
-            )}%`
+            `${round(result.correspondenceStrength * 100, 1)}%`
         );
-
-        /* ---------------- GEOMETRY ---------------- */
 
         setText(
             "inlierRatio",
-            `${round(
-                verification.ratio * 100,
-                1
-            )}%`
+            `${round(result.inlierRatio * 100, 1)}%`
         );
 
         setText(
             "geometricConsistency",
-            `${round(
-                verification.consistency,
-                1
-            )}%`
+            `${round(result.geometryConsistency * 100, 1)}%`
         );
 
         setText(
-            "homographyStatus",
-            verification.model
-                ? "AFFINE MODEL VERIFIED"
-                : "NOT ESTABLISHED"
+            "modelType",
+            result.modelType
         );
 
         setText(
             "verificationStatus",
-            verification.inliers.length >= 6
-                ? "RANSAC CONSISTENT"
-                : "INSUFFICIENT INLIERS"
+            result.verificationStatus
         );
 
-        setText(
-            "visualNote",
-            `LOCAL FEATURES + RANSAC • ${matchingMode} MATCHING`
-        );
+        const interpretation =
+            $("interpretation");
 
-        setText(
-            "interpretation",
-            buildInterpretation(
-                scored,
-                featuresA,
-                featuresB,
-                matches,
-                verification,
-                matchingMode
-            )
-        );
+        if (interpretation) {
+            interpretation.textContent =
+                buildInterpretation(result);
+        }
 
         createCorrespondenceMap(
             result.imageA,
             result.imageB,
-            result.workA,
-            result.workB,
-            verification.inliers
-        );
-
-        const placeholder =
-            $("visualPlaceholder");
-
-        if (placeholder) {
-            placeholder.style.display =
-                verification.inliers.length
-                    ? "none"
-                    : "";
-        }
-
-        setDisabled(
-            "downloadReportBtn",
-            false
+            result.featuresA,
+            result.featuresB,
+            result.verified
         );
     }
 
-    /* ============================================================
+    /* ----------------------------------------------------------
        MAIN ANALYSIS
-       ============================================================ */
+       ---------------------------------------------------------- */
 
     async function analyzeImages() {
         if (
@@ -3003,47 +1997,52 @@
         ) {
             setText(
                 "status",
-                "Please upload both Image A and Image B before analysis."
+                "PLEASE UPLOAD BOTH IMAGES."
             );
+
             return;
         }
 
         const start =
             performance.now();
 
+        const analyzeButton =
+            $("analyzeBtn");
+
+        if (analyzeButton) {
+            analyzeButton.disabled = true;
+        }
+
         resetPipeline();
+        resetResults();
 
         try {
-            /* ---------------- ACQUIRE ---------------- */
+            /* ACQUIRE */
 
-            setPipelineActive(
-                "stageAcquire"
-            );
+            setPipelineActive("stageAcquire");
 
             setText(
                 "status",
                 "ACQUIRING IMAGE DATA..."
             );
 
-            const [
-                imageA,
-                imageB
-            ] = await Promise.all([
-                imageToGray(
+            await nextFrame();
+
+            const imageA =
+                await imageToGray(
                     state.imageAFile
-                ),
-                imageToGray(
+                );
+
+            const imageB =
+                await imageToGray(
                     state.imageBFile
-                )
-            ]);
+                );
 
             setPipelineComplete(
                 "stageAcquire"
             );
 
-            await nextFrame();
-
-            /* ---------------- PREPROCESS ---------------- */
+            /* PREPROCESS */
 
             setPipelineActive(
                 "stagePreprocess"
@@ -3051,28 +2050,42 @@
 
             setText(
                 "status",
-                "NORMALIZING LUNAR SURFACE DATA..."
+                "PREPROCESSING LUNAR IMAGERY..."
             );
 
-            const workA =
-                localNormalize(imageA);
+            await delay(80);
 
-            const workB =
-                localNormalize(imageB);
+            const processedA =
+                localNormalize(
+                    resizeGray(
+                        imageA,
+                        CONFIG.WORK_MAX_DIMENSION
+                    )
+                );
+
+            const processedB =
+                localNormalize(
+                    resizeGray(
+                        imageB,
+                        CONFIG.WORK_MAX_DIMENSION
+                    )
+                );
 
             const qualityA =
-                imageQuality(workA);
+                imageQuality(
+                    processedA
+                );
 
             const qualityB =
-                imageQuality(workB);
+                imageQuality(
+                    processedB
+                );
 
             setPipelineComplete(
                 "stagePreprocess"
             );
 
-            await nextFrame();
-
-            /* ---------------- EXTRACT ---------------- */
+            /* FEATURE EXTRACTION */
 
             setPipelineActive(
                 "stageExtract"
@@ -3080,14 +2093,36 @@
 
             setText(
                 "status",
-                "EXTRACTING LUNAR FEATURES..."
+                "EXTRACTING LUNAR SURFACE FEATURES..."
             );
 
+            await nextFrame();
+
             const featuresA =
-                await extractFeatures(workA);
+                extractFeatures(
+                    processedA
+                );
 
             const featuresB =
-                await extractFeatures(workB);
+                extractFeatures(
+                    processedB
+                );
+
+            featuresA.imageWidth =
+                processedA.width;
+
+            featuresA.imageHeight =
+                processedA.height;
+
+            featuresB.imageWidth =
+                processedB.width;
+
+            featuresB.imageHeight =
+                processedB.height;
+
+            setPipelineComplete(
+                "stageExtract"
+            );
 
             if (
                 featuresA.length <
@@ -3100,13 +2135,7 @@
                 );
             }
 
-            setPipelineComplete(
-                "stageExtract"
-            );
-
-            await nextFrame();
-
-            /* ---------------- MATCH ---------------- */
+            /* MATCH */
 
             setPipelineActive(
                 "stageMatch"
@@ -3114,19 +2143,12 @@
 
             setText(
                 "status",
-                "SEARCHING FOR LUNAR FEATURE CORRESPONDENCES..."
+                "SEARCHING FOR FEATURE CORRESPONDENCES..."
             );
 
-            const matchResult =
-                await robustMatch(
-                    featuresA,
-                    featuresB
-                );
+            await nextFrame();
 
-            const matches =
-                matchResult.matches;
-
-            const rawFeatureComparisons =
+            const allPossibleComparisons =
                 Math.min(
                     featuresA.length,
                     CONFIG.MAX_MATCH_FEATURES
@@ -3136,13 +2158,17 @@
                     CONFIG.MAX_MATCH_FEATURES
                 );
 
+            const matches =
+                robustMatch(
+                    featuresA,
+                    featuresB
+                );
+
             setPipelineComplete(
                 "stageMatch"
             );
 
-            await nextFrame();
-
-            /* ---------------- VERIFY ---------------- */
+            /* VERIFY */
 
             setPipelineActive(
                 "stageVerify"
@@ -3150,83 +2176,187 @@
 
             setText(
                 "status",
-                "VERIFYING GEOMETRIC CONSISTENCY..."
+                "VERIFYING SPATIAL CONSISTENCY..."
             );
 
-            const verification =
+            await nextFrame();
+
+            const geometry =
                 verifyGeometry(
-                    matches,
-                    workA,
-                    workB
-                );
-
-            setPipelineComplete(
-                "stageVerify"
-            );
-
-            await nextFrame();
-
-            /* ---------------- SCORE ---------------- */
-
-            setPipelineActive(
-                "stageScore"
-            );
-
-            setText(
-                "status",
-                "CALCULATING EVIDENCE-BASED CONFIDENCE..."
-            );
-
-            const scored =
-                calculateScore(
                     featuresA,
                     featuresB,
-                    matches,
-                    verification,
-                    qualityA,
-                    qualityB,
-                    matchResult.mode
+                    matches
                 );
+
+            setPipelineComplete(
+                "stageVerify"
+            );
+
+            const verified =
+                geometry.inliers.map(
+                    item =>
+                        matches[
+                            item.index
+                        ]
+                            ? {
+                                  match:
+                                      matches[
+                                          item.index
+                                      ],
+                                  error:
+                                      item.error
+                              }
+                            : null
+                ).filter(Boolean);
+
+            const verifiedMatches =
+                verified.length;
+
+            const coverage =
+                calculateCoverage(
+                    featuresA,
+                    featuresB,
+                    verified
+                );
+
+            const matchQuality =
+                calculateMatchQuality(
+                    matches,
+                    geometry.inliers
+                );
+
+            const correspondenceStrength =
+                clamp(
+                    0.40 *
+                        clamp(
+                            verifiedMatches /
+                            20,
+                            0,
+                            1
+                        ) +
+                    0.35 *
+                        geometry.inlierRatio +
+                    0.25 *
+                        matchQuality,
+                    0,
+                    1
+                );
+
+            /* SCORE */
+
+            setPipelineActive(
+                "stageScore"
+            );
+
+            setText(
+                "status",
+                "CALCULATING CORRESPONDENCE SCORE..."
+            );
+
+            await nextFrame();
+
+            const score =
+                calculateScore({
+                    qualityA:
+                        qualityA.score,
+                    qualityB:
+                        qualityB.score,
+                    matches,
+                    verifiedMatches,
+                    inlierRatio:
+                        geometry.inlierRatio,
+                    geometryConsistency:
+                        geometry.consistency,
+                    coverage,
+                    matchQuality
+                });
+
+            const confidence =
+                calculateConfidence({
+                    score,
+                    verifiedMatches,
+                    inlierRatio:
+                        geometry.inlierRatio,
+                    geometryConsistency:
+                        geometry.consistency,
+                    coverage,
+                    matchQuality
+                });
 
             setPipelineComplete(
                 "stageScore"
             );
 
-            await nextFrame();
-
-            /* ---------------- REPORT ---------------- */
+            /* REPORT */
 
             setPipelineActive(
                 "stageReport"
             );
 
-            const processingMs =
+            setText(
+                "status",
+                "GENERATING ANALYSIS REPORT..."
+            );
+
+            await delay(120);
+
+            const processTime =
                 performance.now() -
                 start;
 
             const result = {
-                scored,
-                processingMs,
+                score,
 
-                imageA,
-                imageB,
+                confidence,
 
-                workA,
-                workB,
+                verifiedMatches,
+
+                averageQuality:
+                    (
+                        qualityA.score +
+                        qualityB.score
+                    ) / 2,
+
+                processTime,
+
+                rawMatches:
+                    allPossibleComparisons,
+
+                candidateMatches:
+                    matches.length,
+
+                coverage,
+
+                correspondenceStrength,
+
+                inlierRatio:
+                    geometry.inlierRatio,
+
+                geometryConsistency:
+                    geometry.consistency,
+
+                modelType:
+                    geometry.model
+                        ? "AFFINE MODEL VERIFIED"
+                        : "NO MODEL",
+
+                verificationStatus:
+                    geometry.status,
 
                 qualityA,
                 qualityB,
+
+                imageA:
+                    processedA,
+
+                imageB:
+                    processedB,
 
                 featuresA,
                 featuresB,
 
                 matches,
-                verification,
-
-                matchingMode:
-                    matchResult.mode,
-
-                rawFeatureComparisons,
+                verified,
 
                 generatedAt:
                     new Date().toISOString()
@@ -3245,16 +2375,29 @@
 
             setText(
                 "status",
-                scored.status
+                result.verifiedMatches >=
+                    CONFIG.MIN_VERIFIED_MATCHES
+                    ? "ANALYSIS COMPLETE — CORRESPONDENCE VERIFIED"
+                    : "ANALYSIS COMPLETE — EVIDENCE INSUFFICIENT FOR RELIABLE CORRESPONDENCE"
+            );
+
+            setDisabled(
+                "downloadReportBtn",
+                false
             );
 
         } catch (error) {
             console.error(
-                "LUNARMATCH V7 ERROR:",
+                "LUNARMATCH analysis error:",
                 error
             );
 
-            const current =
+            setText(
+                "status",
+                `ANALYSIS ERROR — ${error.message}`
+            );
+
+            const active =
                 PIPELINE.find(id => {
                     const el = $(id);
                     return (
@@ -3265,31 +2408,28 @@
                     );
                 });
 
-            if (current) {
+            if (active) {
                 setPipelineError(
-                    current
+                    active
                 );
             }
 
-            setText(
-                "status",
-                `ANALYSIS ERROR — ${error.message}`
-            );
+        } finally {
+            if (analyzeButton) {
+                analyzeButton.disabled =
+                    false;
+            }
         }
     }
 
-    /* ============================================================
-       IMAGE PREVIEW
-       ============================================================ */
+    /* ----------------------------------------------------------
+       PREVIEW
+       ---------------------------------------------------------- */
 
     function updatePreview(
-        input,
+        file,
         previewId
     ) {
-        const file =
-            input.files &&
-            input.files[0];
-
         if (!file) return;
 
         const preview =
@@ -3297,23 +2437,30 @@
 
         if (!preview) return;
 
-        const reader =
-            new FileReader();
+        const oldUrl =
+            preview.dataset.objectUrl;
 
-        reader.onload = event => {
-            preview.src =
-                event.target.result;
+        if (oldUrl) {
+            URL.revokeObjectURL(
+                oldUrl
+            );
+        }
 
-            preview.style.display =
-                "";
-        };
+        const url =
+            URL.createObjectURL(
+                file
+            );
 
-        reader.readAsDataURL(file);
+        preview.dataset.objectUrl =
+            url;
+
+        preview.src = url;
+        preview.style.display = "";
     }
 
-    /* ============================================================
+    /* ----------------------------------------------------------
        IMAGE HANDLING
-       ============================================================ */
+       ---------------------------------------------------------- */
 
     function handleImage(
         file,
@@ -3321,49 +2468,65 @@
         input
     ) {
         try {
-            validateImageFile(file);
+            validateImageFile(
+                file
+            );
 
             if (side === "A") {
-                state.imageAFile = file;
+                state.imageAFile =
+                    file;
 
                 updatePreview(
-                    input,
+                    file,
                     "previewA"
                 );
             } else {
-                state.imageBFile = file;
+                state.imageBFile =
+                    file;
 
                 updatePreview(
-                    input,
+                    file,
                     "previewB"
                 );
             }
 
-            setText(
-                "status",
-                `${side === "A"
-                    ? "IMAGE A"
-                    : "IMAGE B"} READY — `
-                +
-                file.name
-            );
+            state.lastAnalysis =
+                null;
 
             setDisabled(
                 "downloadReportBtn",
                 true
             );
 
+            setText(
+                "status",
+                `${side === "A" ? "IMAGE A" : "IMAGE B"} READY — ${file.name}`
+            );
+
+            if (input) {
+                input.value = "";
+            }
+
         } catch (error) {
+            console.error(
+                "Upload error:",
+                error
+            );
+
             setText(
                 "status",
                 `UPLOAD ERROR — ${error.message}`
             );
+
+            if (input) {
+                input.value = "";
+            }
         }
     }
 
-    /* ============================================================
-       FILE INPUT SETUP
-       ============================================================ */
+    /* ----------------------------------------------------------
+       FILE INPUTS
+       ---------------------------------------------------------- */
 
     function setupImageInput(
         inputId,
@@ -3372,34 +2535,41 @@
         const input =
             $(inputId);
 
-        if (!input) return;
+        if (!input) {
+            console.warn(
+                `LUNARMATCH: ${inputId} not found.`
+            );
+
+            return;
+        }
 
         input.type = "file";
 
         input.accept =
             ".jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff,image/*";
 
-        input.addEventListener(
-            "change",
-            () => {
-                const file =
-                    input.files &&
-                    input.files[0];
+        input.onchange = () => {
+            const file =
+                input.files &&
+                input.files[0];
 
-                if (file) {
-                    handleImage(
-                        file,
-                        side,
-                        input
-                    );
-                }
+            if (file) {
+                handleImage(
+                    file,
+                    side,
+                    input
+                );
             }
-        );
+        };
     }
 
-    /* ============================================================
-       DROP ZONE
-       ============================================================ */
+    /* ----------------------------------------------------------
+       DROP ZONES
+       IMPORTANT:
+       No manual input.click() here.
+       The HTML <label for="fileA/fileB"> already handles
+       normal clicking and prevents double file dialogs.
+       ---------------------------------------------------------- */
 
     function setupDropZone(
         zone,
@@ -3414,51 +2584,43 @@
 
         if (!input) return;
 
-        zone.addEventListener(
-            "click",
-            event => {
-                if (
-                    event.target.tagName ===
-                    "INPUT"
-                ) {
-                    return;
-                }
+        [
+            "dragenter",
+            "dragover"
+        ].forEach(
+            eventName => {
+                zone.addEventListener(
+                    eventName,
+                    event => {
+                        event.preventDefault();
+                        event.stopPropagation();
 
-                input.click();
+                        zone.classList.add(
+                            "drag-active"
+                        );
+                    }
+                );
             }
         );
 
         [
-            "dragenter",
-            "dragover"
-        ].forEach(eventName => {
-            zone.addEventListener(
-                eventName,
-                event => {
-                    event.preventDefault();
-
-                    zone.classList.add(
-                        "drag-active"
-                    );
-                }
-            );
-        });
-
-        [
             "dragleave",
             "drop"
-        ].forEach(eventName => {
-            zone.addEventListener(
-                eventName,
-                event => {
-                    event.preventDefault();
+        ].forEach(
+            eventName => {
+                zone.addEventListener(
+                    eventName,
+                    event => {
+                        event.preventDefault();
+                        event.stopPropagation();
 
-                    zone.classList.remove(
-                        "drag-active"
-                    );
-                }
-            );
-        });
+                        zone.classList.remove(
+                            "drag-active"
+                        );
+                    }
+                );
+            }
+        );
 
         zone.addEventListener(
             "drop",
@@ -3481,431 +2643,273 @@
         );
     }
 
-    /* ============================================================
-       NAVIGATION
-       ============================================================ */
+    /* ----------------------------------------------------------
+       PDF REPORT
+       ---------------------------------------------------------- */
 
-    function setupNavigation() {
-        document
-            .querySelectorAll(
-                'a[href^="#"]'
-            )
-            .forEach(link => {
-                link.addEventListener(
-                    "click",
-                    event => {
-                        const href =
-                            link.getAttribute(
-                                "href"
-                            );
-
-                        if (
-                            !href ||
-                            href === "#"
-                        ) {
-                            return;
-                        }
-
-                        const target =
-                            document.querySelector(
-                                href
-                            );
-
-                        if (!target) return;
-
-                        event.preventDefault();
-
-                        target.scrollIntoView({
-                            behavior:
-                                "smooth",
-                            block:
-                                "start"
-                        });
-                    }
-                );
-            });
-    }
-
-    /* ============================================================
-       BUTTON EFFECTS
-       ============================================================ */
-
-    function setupButtonEffects() {
-        document
-            .querySelectorAll(
-                "button"
-            )
-            .forEach(button => {
-                button.addEventListener(
-                    "pointerdown",
-                    () => {
-                        button.classList.add(
-                            "button-pressed"
-                        );
-                    }
-                );
-
-                button.addEventListener(
-                    "pointerup",
-                    () => {
-                        button.classList.remove(
-                            "button-pressed"
-                        );
-                    }
-                );
-
-                button.addEventListener(
-                    "pointerleave",
-                    () => {
-                        button.classList.remove(
-                            "button-pressed"
-                        );
-                    }
-                );
-            });
-    }
-
-    /* ============================================================
-       REPORT GENERATION
-       ============================================================ */
-
-    async function loadJsPDF() {
-        if (
-            window.jspdf &&
-            window.jspdf.jsPDF
-        ) {
-            return window.jspdf.jsPDF;
-        }
-
-        await new Promise(
-            (resolve, reject) => {
-                const script =
-                    document.createElement(
-                        "script"
-                    );
-
-                script.src =
-                    "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
-
-                script.onload =
-                    resolve;
-
-                script.onerror =
-                    () => reject(
-                        new Error(
-                            "Unable to load PDF report engine."
-                        )
-                    );
-
-                document.head.appendChild(
-                    script
-                );
-            }
-        );
-
-        return window.jspdf.jsPDF;
-    }
-
-    async function downloadReport() {
+    function downloadReport() {
         if (!state.lastAnalysis) {
             return;
         }
 
-        try {
-            const jsPDF =
-                await loadJsPDF();
-
-            const result =
-                state.lastAnalysis;
-
-            const doc =
-                new jsPDF({
-                    unit: "mm",
-                    format: "a4"
-                });
-
-            const margin = 18;
-
-            let y = 20;
-
-            doc.setFontSize(20);
-
-            doc.text(
-                "LUNARMATCH",
-                margin,
-                y
+        if (
+            typeof window.jspdf ===
+            "undefined"
+        ) {
+            alert(
+                "PDF engine is unavailable. Please refresh the page and try again."
             );
 
-            y += 9;
+            return;
+        }
 
-            doc.setFontSize(10);
+        const result =
+            state.lastAnalysis;
 
+        const {
+            jsPDF
+        } = window.jspdf;
+
+        const doc =
+            new jsPDF();
+
+        const left = 18;
+
+        let y = 20;
+
+        doc.setFontSize(20);
+
+        doc.text(
+            "LUNARMATCH",
+            left,
+            y
+        );
+
+        y += 9;
+
+        doc.setFontSize(11);
+
+        doc.text(
+            "Lunar Intelligence Platform",
+            left,
+            y
+        );
+
+        y += 14;
+
+        doc.setFontSize(14);
+
+        doc.text(
+            "Lunar Image Correspondence Report",
+            left,
+            y
+        );
+
+        y += 12;
+
+        doc.setFontSize(10);
+
+        const lines = [
+            `Generated: ${new Date().toLocaleString()}`,
+            `Image A: ${state.imageAFile ? state.imageAFile.name : "—"}`,
+            `Image B: ${state.imageBFile ? state.imageBFile.name : "—"}`,
+            "",
+            `Overall Match: ${result.score}%`,
+            `Confidence: ${result.confidence.label} (${result.confidence.value}%)`,
+            `Verified Features: ${result.verifiedMatches}`,
+            `Candidate Matches: ${result.candidateMatches}`,
+            `Feature Coverage: ${round(result.coverage * 100, 1)}%`,
+            `Correspondence Strength: ${round(result.correspondenceStrength * 100, 1)}%`,
+            `Inlier Ratio: ${round(result.inlierRatio * 100, 1)}%`,
+            `Geometric Consistency: ${round(result.geometryConsistency * 100, 1)}%`,
+            `Model: ${result.modelType}`,
+            `Verification: ${result.verificationStatus}`,
+            `Image Quality: ${round(result.averageQuality, 1)}%`,
+            `Processing Time: ${formatTime(result.processTime)}`
+        ];
+
+        lines.forEach(line => {
             doc.text(
-                "Lunar Image Correspondence Analysis Report",
-                margin,
-                y
-            );
-
-            y += 12;
-
-            doc.setFontSize(13);
-
-            doc.text(
-                "Analysis Summary",
-                margin,
-                y
-            );
-
-            y += 8;
-
-            doc.setFontSize(10);
-
-            const summary = [
-                [
-                    "Status",
-                    result.scored.status
-                ],
-                [
-                    "Overall Match",
-                    `${Math.round(
-                        result.scored.score
-                    )}%`
-                ],
-                [
-                    "Confidence",
-                    result.scored.confidence
-                ],
-                [
-                    "Features A",
-                    `${result.featuresA.length}`
-                ],
-                [
-                    "Features B",
-                    `${result.featuresB.length}`
-                ],
-                [
-                    "Candidate Matches",
-                    `${result.matches.length}`
-                ],
-                [
-                    "Verified Matches",
-                    `${result.verification.inliers.length}`
-                ],
-                [
-                    "Inlier Ratio",
-                    `${round(
-                        result.verification.ratio *
-                        100,
-                        1
-                    )}%`
-                ],
-                [
-                    "Geometric Consistency",
-                    `${round(
-                        result.verification.consistency,
-                        1
-                    )}%`
-                ],
-                [
-                    "Matching Mode",
-                    result.matchingMode
-                ],
-                [
-                    "Processing Time",
-                    formatTime(
-                        result.processingMs
-                    )
-                ]
-            ];
-
-            for (const row of summary) {
-                doc.text(
-                    `${row[0]}: ${row[1]}`,
-                    margin,
-                    y
-                );
-
-                y += 6;
-
-                if (y > 270) {
-                    doc.addPage();
-                    y = 20;
-                }
-            }
-
-            y += 7;
-
-            doc.setFontSize(13);
-
-            doc.text(
-                "Image A",
-                margin,
+                line,
+                left,
                 y
             );
 
             y += 7;
+        });
 
-            doc.setFontSize(10);
+        y += 6;
 
-            doc.text(
-                `Resolution: ${result.imageA.width} × ${result.imageA.height}`,
-                margin,
-                y
+        doc.setFontSize(12);
+
+        doc.text(
+            "Interpretation",
+            left,
+            y
+        );
+
+        y += 7;
+
+        doc.setFontSize(10);
+
+        const interpretation =
+            buildInterpretation(
+                result
             );
 
-            y += 6;
-
-            doc.text(
-                `Quality Score: ${round(
-                    result.qualityA.qualityScore,
-                    1
-                )}/100`,
-                margin,
-                y
+        const wrapped =
+            doc.splitTextToSize(
+                interpretation,
+                170
             );
 
-            y += 10;
+        doc.text(
+            wrapped,
+            left,
+            y
+        );
 
-            doc.setFontSize(13);
+        y +=
+            wrapped.length * 6 +
+            10;
 
-            doc.text(
-                "Image B",
-                margin,
-                y
-            );
+        doc.setFontSize(8);
 
-            y += 7;
+        doc.text(
+            "LUNARMATCH — Experimental browser-based lunar image correspondence analysis.",
+            left,
+            285
+        );
 
-            doc.setFontSize(10);
+        doc.save(
+            "LUNARMATCH-Analysis-Report.pdf"
+        );
+    }
 
-            doc.text(
-                `Resolution: ${result.imageB.width} × ${result.imageB.height}`,
-                margin,
-                y
-            );
+    /* ----------------------------------------------------------
+       BUTTONS
+       ---------------------------------------------------------- */
 
-            y += 6;
+    function setupButtons() {
+        const analyze =
+            $("analyzeBtn");
 
-            doc.text(
-                `Quality Score: ${round(
-                    result.qualityB.qualityScore,
-                    1
-                )}/100`,
-                margin,
-                y
-            );
+        if (analyze) {
+            analyze.onclick =
+                analyzeImages;
+        }
 
-            y += 12;
+        const report =
+            $("downloadReportBtn");
 
-            doc.setFontSize(13);
-
-            doc.text(
-                "Interpretation",
-                margin,
-                y
-            );
-
-            y += 7;
-
-            doc.setFontSize(9);
-
-            const interpretation =
-                buildInterpretation(
-                    result.scored,
-                    result.featuresA,
-                    result.featuresB,
-                    result.matches,
-                    result.verification,
-                    result.matchingMode
-                );
-
-            const lines =
-                doc.splitTextToSize(
-                    interpretation,
-                    174
-                );
-
-            doc.text(
-                lines,
-                margin,
-                y
-            );
-
-            y +=
-                lines.length * 4.5 +
-                10;
-
-            doc.setFontSize(8);
-
-            doc.text(
-                "Generated by LUNARMATCH browser-side correspondence engine.",
-                margin,
-                Math.min(y, 285)
-            );
-
-            doc.save(
-                "LUNARMATCH_Analysis_Report.pdf"
-            );
-
-        } catch (error) {
-            console.error(
-                "PDF ERROR:",
-                error
-            );
-
-            setText(
-                "status",
-                `REPORT ERROR — ${error.message}`
-            );
+        if (report) {
+            report.onclick =
+                downloadReport;
         }
     }
 
-    /* ============================================================
-       REGISTRATION / CONTACT PLACEHOLDERS
-       ============================================================ */
+    /* ----------------------------------------------------------
+       NAVIGATION
+       ---------------------------------------------------------- */
 
-    function setupPlaceholders() {
-        const registrationBtn =
-            $("registrationBtn");
-
-        if (registrationBtn) {
-            registrationBtn.addEventListener(
-                "click",
-                () => {
-                    setText(
-                        "status",
-                        "ACCOUNT FEATURES — COMING SOON"
-                    );
-                }
+    function setupNavigation() {
+        const links =
+            document.querySelectorAll(
+                "[data-section]"
             );
-        }
 
-        const contactBtn =
-            $("contactBtn");
-
-        if (contactBtn) {
-            contactBtn.addEventListener(
+        links.forEach(link => {
+            link.addEventListener(
                 "click",
-                () => {
-                    const contact =
-                        $("contact");
+                event => {
+                    const target =
+                        link.dataset.section;
 
-                    if (contact) {
-                        contact.scrollIntoView({
-                            behavior:
-                                "smooth"
+                    if (!target) return;
+
+                    const section =
+                        document.getElementById(
+                            target
+                        );
+
+                    if (section) {
+                        event.preventDefault();
+
+                        section.scrollIntoView({
+                            behavior: "smooth",
+                            block: "start"
                         });
                     }
                 }
             );
-        }
+        });
     }
 
-    /* ============================================================
+    /* ----------------------------------------------------------
+       VISUAL EFFECTS
+       ---------------------------------------------------------- */
+
+    function setupEffects() {
+        document.addEventListener(
+            "mousemove",
+            event => {
+                document.documentElement
+                    .style
+                    .setProperty(
+                        "--mouse-x",
+                        `${event.clientX}px`
+                    );
+
+                document.documentElement
+                    .style
+                    .setProperty(
+                        "--mouse-y",
+                        `${event.clientY}px`
+                    );
+            }
+        );
+    }
+
+    /* ----------------------------------------------------------
+       GLOBAL ERROR REPORTING
+       ---------------------------------------------------------- */
+
+    window.addEventListener(
+        "error",
+        event => {
+            console.error(
+                "LUNARMATCH runtime error:",
+                event.error || event.message
+            );
+        }
+    );
+
+    window.addEventListener(
+        "unhandledrejection",
+        event => {
+            console.error(
+                "LUNARMATCH promise error:",
+                event.reason
+            );
+        }
+    );
+
+    /* ----------------------------------------------------------
        INITIALIZATION
-       ============================================================ */
+       ---------------------------------------------------------- */
 
     function init() {
+        if (
+            window.__LUNARMATCH_INITIALIZED__
+        ) {
+            return;
+        }
+
+        window.__LUNARMATCH_INITIALIZED__ =
+            true;
+
+        state.initialized = true;
+
         setupImageInput(
             "fileA",
             "A"
@@ -3916,65 +2920,34 @@
             "B"
         );
 
-        const dropZones =
-            document.querySelectorAll(
-                ".drop-new"
-            );
+        setupDropZone(
+            document.querySelector(
+                'label[for="fileA"]'
+            ),
+            "A"
+        );
 
-        if (dropZones.length >= 1) {
-            setupDropZone(
-                dropZones[0],
-                "A"
-            );
-        }
+        setupDropZone(
+            document.querySelector(
+                'label[for="fileB"]'
+            ),
+            "B"
+        );
 
-        if (dropZones.length >= 2) {
-            setupDropZone(
-                dropZones[1],
-                "B"
-            );
-        }
-
-        const compareBtn =
-            $("compareBtn");
-
-        if (compareBtn) {
-            compareBtn.addEventListener(
-                "click",
-                analyzeImages
-            );
-        }
-
-        const reportBtn =
-            $("downloadReportBtn");
-
-        if (reportBtn) {
-            reportBtn.addEventListener(
-                "click",
-                downloadReport
-            );
-        }
-
+        setupButtons();
         setupNavigation();
-        setupButtonEffects();
-        setupPlaceholders();
+        setupEffects();
 
+        resetPipeline();
         resetResults();
 
-        console.log(
-            "LUNARMATCH V7 initialized."
+        setText(
+            "status",
+            "SYSTEM READY — AWAITING LUNAR IMAGERY"
         );
 
         console.log(
-            `Feature budget: ${CONFIG.MAX_KEYPOINTS}`
-        );
-
-        console.log(
-            `Match budget: ${CONFIG.MAX_MATCH_FEATURES}`
-        );
-
-        console.log(
-            "Engine: Gradient descriptors + Ratio/Mutual Matching + Affine RANSAC"
+            "LUNARMATCH Lunar Correspondence Engine initialized."
         );
     }
 
@@ -3984,7 +2957,8 @@
     ) {
         document.addEventListener(
             "DOMContentLoaded",
-            init
+            init,
+            { once: true }
         );
     } else {
         init();
