@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LUNARMATCH — Lunar Image Correspondence</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="nav">
+  <div class="brand"><div class="moon">◐</div><div><b>LUNAR<span>MATCH</span></b><small>Lunar Image Correspondence System</small></div></div>
+  <nav>
+    <a class="active" href="#home">⌂ Home</a>
+    <a href="#compare">⇄ Compare</a>
+    <a href="#how">⚙ How It Works</a>
+    <a href="#about">ⓘ About</a>
+    <a href="#contact">✉ Contact</a>
+  </nav>
+</header>
+
+<main>
+<section id="home" class="hero">
+  <div class="hero-content">
+    <p class="eyebrow">AI-POWERED LUNAR ANALYSIS</p>
+    <h1>LUNAR<span>MATCH</span></h1>
+    <h2>Lunar Image Correspondence System</h2>
+    <p>AI-powered image matching for Chandrayaan-2 lunar data</p>
+    <button onclick="document.querySelector('#compare').scrollIntoView({behavior:'smooth'})">Start Analysis →</button>
+  </div>
+</section>
+
+<section id="compare" class="workspace">
+  <div class="panel upload-panel">
+    <div class="panel-title">▧ <span>UPLOAD LUNAR IMAGES</span></div>
+    <p class="muted">Upload two Chandrayaan-2 lunar surface images to find correspondence</p>
+    <div class="uploads">
+      <div>
+        <label>IMAGE A</label>
+        <label class="drop" for="fileA">
+          <div class="upload-icon">↥</div><strong>Drag & drop image here</strong><small>or click to browse</small>
+          <img id="previewA" alt="">
+        </label>
+        <input id="fileA" type="file" accept="image/*" hidden>
+        <small class="formats">Supports: .jpg .jpeg .png .tif</small>
+      </div>
+      <div>
+        <label>IMAGE B</label>
+        <label class="drop" for="fileB">
+          <div class="upload-icon">↥</div><strong>Drag & drop image here</strong><small>or click to browse</small>
+          <img id="previewB" alt="">
+        </label>
+        <input id="fileB" type="file" accept="image/*" hidden>
+        <small class="formats">Supports: .jpg .jpeg .png .tif</small>
+      </div>
+    </div>
+    <button class="compare" id="compareBtn">⌕ &nbsp; COMPARE IMAGES</button>
+    <div class="secure">♧ &nbsp; Your images are processed locally in this demo.</div>
+  </div>
+
+  <div class="panel result-panel">
+    <div class="panel-title">▥ <span>MATCH RESULTS</span></div>
+    <div class="match-banner"><span>✓ &nbsp; <b id="status">READY FOR ANALYSIS</b></span><strong id="score">—</strong></div>
+    <div class="result-grid">
+      <div class="details">
+        <h3>MATCH DETAILS</h3>
+        <div class="row">◎ <span>Corresponding Features</span><b id="features">—</b></div>
+        <div class="row">⬡ <span>Confidence Level</span><b id="confidence" class="pill">—</b></div>
+        <div class="row">☆ <span>Match Quality</span><b id="quality" class="pill">—</b></div>
+        <div class="row">◷ <span>Processing Time</span><b id="time">—</b></div>
+        <div class="row">‹/› <span>Algorithm Used</span><b>SIFT + FLANN*</b></div>
+      </div>
+      <div class="visual">
+        <h3>VISUALIZATION</h3>
+        <div class="images"><div><span>Image A</span><img id="resultA"></div><div><span>Image B</span><img id="resultB"></div></div>
+        <small>● Lines can represent matching keypoints when returned by the backend.</small>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how" class="panel how">
+  <div class="panel-title">⚙ <span>HOW IT WORKS</span></div>
+  <div class="steps">
+    <div><i>1</i><b>Upload Images</b><p>Upload two lunar surface images.</p></div>
+    <div><i>2</i><b>Feature Extraction</b><p>AI extracts key features from both images.</p></div>
+    <div><i>3</i><b>Feature Matching</b><p>Algorithms find corresponding features.</p></div>
+    <div><i>4</i><b>Get Results</b><p>View match percentage and keypoints.</p></div>
+  </div>
+</section>
+
+<section id="about" class="info">
+  <h2>About LUNARMATCH</h2>
+  <p>LUNARMATCH is a web interface for a lunar image correspondence pipeline designed around Chandrayaan-2 imagery. The frontend is prepared to connect to a Python image-processing backend.</p>
+</section>
+</main>
+
+<footer id="contact">© 2026 LUNARMATCH · Lunar Image Correspondence System <span>Built for Space Technology · Chandrayaan-2 · ISRO · India 🇮🇳</span></footer>
+<script src="script.js"></script>
+</body>
+</html>
