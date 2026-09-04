@@ -1,20 +1,16 @@
 import os
-from flask import Flask, send_from_directory, jsonify
+from flask import Flask, send_file, jsonify
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-app = Flask(
-    __name__,
-    static_folder=BASE_DIR,
-    static_url_path=""
-)
+app = Flask(__name__)
 
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
 
 @app.route("/")
-def index():
-    return send_from_directory(BASE_DIR, "index.html")
+def home():
+    return send_file(os.path.join(BASE_DIR, "index.html"))
 
 
 @app.route("/health")
@@ -28,14 +24,16 @@ def health():
     })
 
 
-@app.route("/<path:path>")
-def static_files(path):
-    file_path = os.path.join(BASE_DIR, path)
+@app.route("/<path:filename>")
+def files(filename):
+    file_path = os.path.join(BASE_DIR, filename)
 
     if os.path.isfile(file_path):
-        return send_from_directory(BASE_DIR, path)
+        return send_file(file_path)
 
-    return send_from_directory(BASE_DIR, "index.html")
+    return jsonify({
+        "error": "File not found"
+    }), 404
 
 
 @app.errorhandler(413)
