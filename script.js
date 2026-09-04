@@ -1,4617 +1,3993 @@
 (() => {
-  "use strict";
+    "use strict";
 
-  /*
-   * ============================================================
-   * LUNARMATCH V7 — ENHANCED LUNAR CORRESPONDENCE ENGINE
-   * ============================================================
-   *
-   * Browser-side computer vision.
-   *
-   * Pipeline:
-   *
-   * ACQUIRE
-   *     ↓
-   * PREPROCESS
-   *     ↓
-   * MULTI-SCALE FEATURE EXTRACTION
-   *     ↓
-   * GRADIENT + PATCH DESCRIPTORS
-   *     ↓
-   * ADAPTIVE MUTUAL MATCHING
-   *     ↓
-   * RANSAC GEOMETRIC VERIFICATION
-   *     ↓
-   * SPATIAL CONSISTENCY
-   *     ↓
-   * EVIDENCE-BASED CONFIDENCE
-   *     ↓
-   * CORRESPONDENCE MAP
-   *     ↓
-   * PDF REPORT
-   *
-   * No OpenCV.js / WASM dependency.
-   * Designed for desktop + mobile stability.
-   */
+    /*
+     * ============================================================
+     * LUNARMATCH V7
+     * Browser-side Lunar Correspondence Engine
+     *
+     * No backend dependency for image analysis.
+     * Classical computer vision:
+     * - Adaptive FAST/Harris-style feature detection
+     * - Gradient histogram descriptors
+     * - Ratio + mutual descriptor matching
+     * - Relaxed fallback matching
+     * - Affine RANSAC verification
+     * - Evidence-based confidence scoring
+     * ============================================================
+     */
 
-  /* ============================================================
-     CONFIGURATION
-     ============================================================ */
+    const CONFIG = {
+        MAX_IMAGE_DIMENSION: 1000,
+        WORK_MAX_DIMENSION: 700,
 
-  const MAX_IMAGE_DIMENSION = 1200;
-  const WORK_MAX_DIMENSION = 720;
+        MAX_KEYPOINTS: 900,
+        MAX_MATCH_FEATURES: 320,
 
-  const MAX_KEYPOINTS = 900;
-  const MAX_MATCH_FEATURES = 260;
+        PATCH_RADIUS: 12,
+        DESCRIPTOR_GRID: 4,
+        ORIENTATION_BINS: 8,
 
-  const PATCH_RADIUS = 12;
-  const DESCRIPTOR_STEP = 2;
+        LOWE_RATIO: 0.92,
+        RELAXED_RATIO: 0.96,
 
-  const BASE_RATIO = 0.90;
-  const MIN_RATIO = 0.78;
-  const MAX_RATIO = 0.94;
+        MAX_DESCRIPTOR_DISTANCE: 0.95,
+        RELAXED_DESCRIPTOR_DISTANCE: 1.20,
 
-  const RANSAC_ITERATIONS = 420;
-  const RANSAC_ERROR_PIXELS = 7.5;
+        RANSAC_ITERATIONS: 700,
+        RANSAC_ERROR_PIXELS: 9,
 
-  const MAX_VISUAL_MATCHES = 90;
+        MIN_FEATURES_FOR_ANALYSIS: 8,
+        MIN_CANDIDATES_FOR_GEOMETRY: 4,
+        MIN_VERIFIED_MATCHES: 6,
 
-  const GRID_SIZE = 5;
+        MAX_VISUAL_MATCHES: 80,
 
-  /* ============================================================
-     GLOBAL STATE
-     ============================================================ */
+        GRID_ROWS: 6,
+        GRID_COLS: 6,
 
-  let imageAFile = null;
-  let imageBFile = null;
+        EARLY_RANSAC_INLIER_RATIO: 0.65
+    };
 
-  let imageAData = null;
-  let imageBData = null;
+    const state = {
+        imageAFile: null,
+        imageBFile: null,
 
-  let lastAnalysis = null;
+        imageAData: null,
+        imageBData: null,
 
-  /* ============================================================
-     DOM HELPERS
-     ============================================================ */
+        lastAnalysis: null
+    };
 
-  const $ = id => document.getElementById(id);
-
-  function setText(id, value) {
-    const element = $(id);
-
-    if (element) {
-      element.textContent = value;
-    }
-  }
-
-  function setDisabled(id, state) {
-    const element = $(id);
-
-    if (element) {
-      element.disabled = state;
-    }
-  }
-
-  function clamp(value, min, max) {
-    return Math.max(min, Math.min(max, value));
-  }
-
-  function round(value, digits = 2) {
-    const factor = Math.pow(10, digits);
-    return Math.round(value * factor) / factor;
-  }
-
-  function delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  function formatTime(ms) {
-    return `${round(ms / 1000, 2)} sec`;
-  }
-
-  /* ============================================================
-     PIPELINE UI
-     ============================================================ */
-
-  const PIPELINE = [
-    "stageAcquire",
-    "stagePreprocess",
-    "stageExtract",
-    "stageMatch",
-    "stageVerify",
-    "stageScore",
-    "stageReport"
-  ];
-
-  function resetPipeline() {
-    PIPELINE.forEach(id => {
-      const element = $(id);
-
-      if (!element) return;
-
-      element.classList.remove(
-        "active",
-        "complete",
-        "error"
-      );
-    });
-  }
-
-  function pipelineActive(id) {
-    const element = $(id);
-
-    if (!element) return;
-
-    element.classList.remove(
-      "complete",
-      "error"
-    );
-
-    element.classList.add("active");
-  }
-
-  function pipelineComplete(id) {
-    const element = $(id);
-
-    if (!element) return;
-
-    element.classList.remove(
-      "active",
-      "error"
-    );
-
-    element.classList.add("complete");
-  }
-
-  function pipelineError(id) {
-    const element = $(id);
-
-    if (!element) return;
-
-    element.classList.remove(
-      "active",
-      "complete"
-    );
-
-    element.classList.add("error");
-  }
-
-  /* ============================================================
-     RESULT RESET
-     ============================================================ */
-
-  function resetResults() {
-    setText("status", "SYSTEM READY");
-
-    setText("score", "--");
-    setText("features", "--");
-    setText("confidence", "--");
-    setText("quality", "--");
-    setText("time", "--");
-
-    const fields = [
-      "resolutionA",
-      "keypointsA",
-      "contrastA",
-      "sharpnessA",
-      "qualityScoreA",
-
-      "resolutionB",
-      "keypointsB",
-      "contrastB",
-      "sharpnessB",
-      "qualityScoreB",
-
-      "rawMatches",
-      "candidateMatches",
-      "verifiedMatches",
-      "featureCoverage",
-      "correspondenceStrength",
-      "inlierRatio",
-      "geometricConsistency",
-      "homographyStatus",
-      "verificationStatus"
+    const PIPELINE = [
+        "stageAcquire",
+        "stagePreprocess",
+        "stageExtract",
+        "stageMatch",
+        "stageVerify",
+        "stageScore",
+        "stageReport"
     ];
 
-    fields.forEach(id => setText(id, "--"));
+    /* ============================================================
+       BASIC HELPERS
+       ============================================================ */
 
-    const map = $("correspondenceMap");
+    const $ = (id) => document.getElementById(id);
 
-    if (map) {
-      map.removeAttribute("src");
-      map.style.display = "none";
+    function setText(id, value) {
+        const el = $(id);
+        if (el) el.textContent = value;
     }
 
-    const placeholder = $("visualPlaceholder");
-
-    if (placeholder) {
-      placeholder.style.display = "";
+    function setDisabled(id, disabled) {
+        const el = $(id);
+        if (el) el.disabled = disabled;
     }
 
-    setText(
-      "interpretation",
-      "Upload two lunar images and run the analysis to generate a correspondence assessment."
-    );
-
-    resetPipeline();
-
-    lastAnalysis = null;
-
-    setDisabled(
-      "downloadReportBtn",
-      true
-    );
-  }
-
-  /* ============================================================
-     FILE VALIDATION
-     ============================================================ */
-
-  function validateFile(file) {
-    if (!file) {
-      throw new Error("No image selected.");
+    function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
     }
 
-    const validMime =
-      /^image\/(jpeg|png|webp|bmp|tiff?)$/i.test(
-        file.type
-      );
-
-    const extension =
-      /\.([a-z0-9]+)$/i.exec(file.name)?.[1]?.toLowerCase();
-
-    const validExtension = [
-      "jpg",
-      "jpeg",
-      "png",
-      "webp",
-      "tif",
-      "tiff",
-      "bmp"
-    ].includes(extension);
-
-    if (!validMime && !validExtension) {
-      throw new Error(
-        "Unsupported image format. Use JPG, PNG, WEBP, TIF or BMP."
-      );
+    function round(value, decimals = 1) {
+        if (!Number.isFinite(value)) return 0;
+        const p = Math.pow(10, decimals);
+        return Math.round(value * p) / p;
     }
 
-    if (file.size > 25 * 1024 * 1024) {
-      throw new Error(
-        "Image is too large. Maximum size is 25 MB."
-      );
-    }
-  }
-
-  /* ============================================================
-     FILE → IMAGE
-     ============================================================ */
-
-  function readDataURL(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-
-      reader.onload = () => {
-        resolve(reader.result);
-      };
-
-      reader.onerror = () => {
-        reject(
-          new Error("Could not read the image.")
-        );
-      };
-
-      reader.readAsDataURL(file);
-    });
-  }
-
-  function decodeImage(dataURL) {
-    return new Promise((resolve, reject) => {
-      const image = new Image();
-
-      image.onload = () => resolve(image);
-
-      image.onerror = () => {
-        reject(
-          new Error("Could not decode the image.")
-        );
-      };
-
-      image.src = dataURL;
-    });
-  }
-
-  async function imageToGray(file) {
-    validateFile(file);
-
-    const dataURL =
-      await readDataURL(file);
-
-    const image =
-      await decodeImage(dataURL);
-
-    let width =
-      image.naturalWidth ||
-      image.width;
-
-    let height =
-      image.naturalHeight ||
-      image.height;
-
-    const scale =
-      Math.min(
-        1,
-        MAX_IMAGE_DIMENSION /
-        Math.max(width, height)
-      );
-
-    width =
-      Math.max(
-        96,
-        Math.round(width * scale)
-      );
-
-    height =
-      Math.max(
-        96,
-        Math.round(height * scale)
-      );
-
-    const canvas =
-      document.createElement("canvas");
-
-    canvas.width = width;
-    canvas.height = height;
-
-    const context =
-      canvas.getContext(
-        "2d",
-        {
-          willReadFrequently: true
-        }
-      );
-
-    context.drawImage(
-      image,
-      0,
-      0,
-      width,
-      height
-    );
-
-    const rgba =
-      context.getImageData(
-        0,
-        0,
-        width,
-        height
-      ).data;
-
-    const gray =
-      new Float32Array(
-        width * height
-      );
-
-    for (
-      let i = 0, p = 0;
-      i < gray.length;
-      i++, p += 4
-    ) {
-      gray[i] =
-        0.299 * rgba[p] +
-        0.587 * rgba[p + 1] +
-        0.114 * rgba[p + 2];
+    function delay(ms = 0) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    return {
-      width,
-      height,
-      gray,
-      canvas,
-      dataURL
-    };
-  }
-
-  /* ============================================================
-     RESIZE
-     ============================================================ */
-
-  function resizeGray(
-    source,
-    sourceWidth,
-    sourceHeight,
-    targetWidth,
-    targetHeight
-  ) {
-    const result =
-      new Float32Array(
-        targetWidth *
-        targetHeight
-      );
-
-    const scaleX =
-      sourceWidth /
-      targetWidth;
-
-    const scaleY =
-      sourceHeight /
-      targetHeight;
-
-    for (
-      let y = 0;
-      y < targetHeight;
-      y++
-    ) {
-      const sourceY =
-        Math.min(
-          sourceHeight - 1,
-          Math.floor(
-            (y + 0.5) *
-            scaleY
-          )
-        );
-
-      for (
-        let x = 0;
-        x < targetWidth;
-        x++
-      ) {
-        const sourceX =
-          Math.min(
-            sourceWidth - 1,
-            Math.floor(
-              (x + 0.5) *
-              scaleX
-            )
-          );
-
-        result[
-          y * targetWidth + x
-        ] =
-          source[
-            sourceY *
-            sourceWidth +
-            sourceX
-          ];
-      }
-    }
-
-    return result;
-  }
-
-  /* ============================================================
-     PREPROCESSING
-     ============================================================ */
-
-  function localNormalize(image) {
-    const scale =
-      Math.min(
-        1,
-        WORK_MAX_DIMENSION /
-        Math.max(
-          image.width,
-          image.height
-        )
-      );
-
-    const width =
-      Math.max(
-        128,
-        Math.round(
-          image.width *
-          scale
-        )
-      );
-
-    const height =
-      Math.max(
-        128,
-        Math.round(
-          image.height *
-          scale
-        )
-      );
-
-    const source =
-      resizeGray(
-        image.gray,
-        image.width,
-        image.height,
-        width,
-        height
-      );
-
-    const normalized =
-      new Float32Array(
-        width * height
-      );
-
-    /*
-     * Global mean/std first.
-     * This prevents very dark or bright lunar images
-     * from producing incompatible descriptors.
-     */
-
-    let sum = 0;
-
-    for (
-      let i = 0;
-      i < source.length;
-      i++
-    ) {
-      sum += source[i];
-    }
-
-    const mean =
-      sum /
-      source.length;
-
-    let variance = 0;
-
-    for (
-      let i = 0;
-      i < source.length;
-      i++
-    ) {
-      const d =
-        source[i] -
-        mean;
-
-      variance +=
-        d * d;
-    }
-
-    variance /=
-      source.length;
-
-    const std =
-      Math.sqrt(
-        variance
-      ) || 1;
-
-    /*
-     * Mild contrast normalization.
-     */
-
-    for (
-      let i = 0;
-      i < source.length;
-      i++
-    ) {
-      normalized[i] =
-        clamp(
-          128 +
-          (
-            source[i] -
-            mean
-          ) /
-          std *
-          48,
-          0,
-          255
-        );
-    }
-
-    /*
-     * Small smoothing pass.
-     */
-
-    const smooth =
-      new Float32Array(
-        normalized.length
-      );
-
-    for (
-      let y = 0;
-      y < height;
-      y++
-    ) {
-      for (
-        let x = 0;
-        x < width;
-        x++
-      ) {
-        const i =
-          y * width +
-          x;
-
-        if (
-          x === 0 ||
-          y === 0 ||
-          x === width - 1 ||
-          y === height - 1
-        ) {
-          smooth[i] =
-            normalized[i];
-
-          continue;
-        }
-
-        smooth[i] =
-          (
-            normalized[i] * 4 +
-            normalized[i - 1] +
-            normalized[i + 1] +
-            normalized[i - width] +
-            normalized[i + width]
-          ) / 8;
-      }
-    }
-
-    return {
-      gray: smooth,
-      width,
-      height
-    };
-  }
-
-  /* ============================================================
-     IMAGE QUALITY
-     ============================================================ */
-
-  function percentileSample(array, q) {
-    if (!array.length) {
-      return 0;
-    }
-
-    /*
-     * Sampling keeps mobile analysis responsive.
-     */
-
-    const maxSamples = 60000;
-    const step =
-      Math.max(
-        1,
-        Math.floor(
-          array.length /
-          maxSamples
-        )
-      );
-
-    const values = [];
-
-    for (
-      let i = 0;
-      i < array.length;
-      i += step
-    ) {
-      values.push(
-        array[i]
-      );
-    }
-
-    values.sort(
-      (a, b) => a - b
-    );
-
-    const position =
-      (values.length - 1) *
-      q;
-
-    const lower =
-      Math.floor(position);
-
-    const upper =
-      Math.ceil(position);
-
-    if (
-      lower === upper
-    ) {
-      return values[lower];
-    }
-
-    return (
-      values[lower] +
-      (
-        values[upper] -
-        values[lower]
-      ) *
-      (
-        position -
-        lower
-      )
-    );
-  }
-
-  function imageQuality(image) {
-    const {
-      gray,
-      width,
-      height
-    } = image;
-
-    let sum = 0;
-
-    for (
-      let i = 0;
-      i < gray.length;
-      i++
-    ) {
-      sum += gray[i];
-    }
-
-    const mean =
-      sum /
-      gray.length;
-
-    let variance = 0;
-
-    for (
-      let i = 0;
-      i < gray.length;
-      i++
-    ) {
-      const d =
-        gray[i] -
-        mean;
-
-      variance +=
-        d * d;
-    }
-
-    variance /=
-      gray.length;
-
-    const contrast =
-      Math.sqrt(
-        variance
-      );
-
-    let lapSquared = 0;
-    let count = 0;
-
-    for (
-      let y = 1;
-      y < height - 1;
-      y++
-    ) {
-      for (
-        let x = 1;
-        x < width - 1;
-        x++
-      ) {
-        const i =
-          y * width +
-          x;
-
-        const lap =
-          gray[i - width] +
-          gray[i + width] +
-          gray[i - 1] +
-          gray[i + 1] -
-          4 * gray[i];
-
-        lapSquared +=
-          lap * lap;
-
-        count++;
-      }
-    }
-
-    const sharpness =
-      count
-        ? lapSquared /
-          count
-        : 0;
-
-    const p95 =
-      percentileSample(
-        gray,
-        0.95
-      );
-
-    const p05 =
-      percentileSample(
-        gray,
-        0.05
-      );
-
-    const dynamicRange =
-      p95 - p05;
-
-    const contrastScore =
-      clamp(
-        contrast /
-        52 *
-        100,
-        0,
-        100
-      );
-
-    const sharpnessScore =
-      clamp(
-        Math.log1p(
-          sharpness
-        ) /
-        Math.log1p(
-          900
-        ) *
-        100,
-        0,
-        100
-      );
-
-    const rangeScore =
-      clamp(
-        dynamicRange /
-        190 *
-        100,
-        0,
-        100
-      );
-
-    const exposurePenalty =
-      Math.abs(
-        mean - 128
-      ) /
-      128;
-
-    const qualityScore =
-      clamp(
-        0.40 *
-          contrastScore +
-
-        0.40 *
-          sharpnessScore +
-
-        0.20 *
-          rangeScore -
-
-        8 *
-          exposurePenalty,
-
-        0,
-        100
-      );
-
-    let label =
-      "FAIR";
-
-    if (
-      qualityScore >= 82
-    ) {
-      label =
-        "EXCELLENT";
-    } else if (
-      qualityScore >= 68
-    ) {
-      label =
-        "GOOD";
-    } else if (
-      qualityScore < 45
-    ) {
-      label =
-        "LIMITED";
-    }
-
-    return {
-      resolution:
-        `${width} × ${height}`,
-
-      contrast:
-        round(
-          contrast,
-          2
-        ),
-
-      sharpness:
-        round(
-          sharpness,
-          2
-        ),
-
-      qualityScore:
-        round(
-          qualityScore,
-          1
-        ),
-
-      qualityLabel:
-        label
-    };
-  }
-
-  /* ============================================================
-     GRADIENT
-     ============================================================ */
-
-  function gradientAt(
-    gray,
-    width,
-    height,
-    x,
-    y
-  ) {
-    const px =
-      Math.round(x);
-
-    const py =
-      Math.round(y);
-
-    if (
-      px < 1 ||
-      py < 1 ||
-      px >= width - 1 ||
-      py >= height - 1
-    ) {
-      return [0, 0];
-    }
-
-    const index =
-      py * width +
-      px;
-
-    return [
-      (
-        gray[index + 1] -
-        gray[index - 1]
-      ) / 2,
-
-      (
-        gray[index + width] -
-        gray[index - width]
-      ) / 2
-    ];
-  }
-
-  /* ============================================================
-     FEATURE DETECTOR
-     ============================================================ */
-
-  function detectFeatures(image) {
-    const {
-      gray,
-      width,
-      height
-    } = image;
-
-    const candidates = [];
-
-    /*
-     * FAST-style circular neighbourhood.
-     */
-
-    const circle = [
-      [0, -3],
-      [1, -3],
-      [2, -2],
-      [3, -1],
-      [3, 0],
-      [3, 1],
-      [2, 2],
-      [1, 3],
-      [0, 3],
-      [-1, 3],
-      [-2, 2],
-      [-3, 1],
-      [-3, 0],
-      [-3, -1],
-      [-2, -2],
-      [-1, -3]
-    ];
-
-    const step =
-      Math.max(
-        2,
-        Math.floor(
-          Math.min(
-            width,
-            height
-          ) / 320
-        )
-      );
-
-    /*
-     * Adaptive threshold.
-     */
-
-    let globalSum = 0;
-
-    for (
-      let i = 0;
-      i < gray.length;
-      i += 4
-    ) {
-      globalSum +=
-        gray[i];
-    }
-
-    const globalMean =
-      globalSum /
-      Math.ceil(
-        gray.length / 4
-      );
-
-    const threshold =
-      globalMean < 90
-        ? 13
-        : globalMean > 175
-          ? 22
-          : 17;
-
-    for (
-      let y = 8;
-      y < height - 8;
-      y += step
-    ) {
-      for (
-        let x = 8;
-        x < width - 8;
-        x += step
-      ) {
-        const center =
-          gray[
-            y * width +
-            x
-          ];
-
-        let brighter = 0;
-        let darker = 0;
-
-        for (
-          let k = 0;
-          k < circle.length;
-          k++
-        ) {
-          const value =
-            gray[
-              (
-                y +
-                circle[k][1]
-              ) *
-              width +
-              (
-                x +
-                circle[k][0]
-              )
-            ];
-
-          if (
-            value >
-            center +
-            threshold
-          ) {
-            brighter++;
-          }
-
-          if (
-            value <
-            center -
-            threshold
-          ) {
-            darker++;
-          }
-        }
-
-        if (
-          brighter < 6 &&
-          darker < 6
-        ) {
-          continue;
-        }
-
-        /*
-         * Harris-like local structure score.
-         */
-
-        let sxx = 0;
-        let syy = 0;
-        let sxy = 0;
-        let gradientEnergy = 0;
-
-        for (
-          let yy = -2;
-          yy <= 2;
-          yy++
-        ) {
-          for (
-            let xx = -2;
-            xx <= 2;
-            xx++
-          ) {
-            const [
-              gx,
-              gy
-            ] =
-              gradientAt(
-                gray,
-                width,
-                height,
-                x + xx,
-                y + yy
-              );
-
-            sxx +=
-              gx * gx;
-
-            syy +=
-              gy * gy;
-
-            sxy +=
-              gx * gy;
-
-            gradientEnergy +=
-              Math.abs(gx) +
-              Math.abs(gy);
-          }
-        }
-
-        const determinant =
-          sxx * syy -
-          sxy * sxy;
-
-        const trace =
-          sxx +
-          syy +
-          1e-6;
-
-        const harris =
-          determinant /
-          trace;
-
-        const circleContrast =
-          Math.max(
-            brighter,
-            darker
-          );
-
-        const score =
-          harris *
-          (
-            1 +
-            circleContrast /
-            16
-          ) +
-          gradientEnergy *
-          0.25;
-
-        if (
-          score >
-          28
-        ) {
-          candidates.push({
-            x,
-            y,
-            score
-          });
-        }
-      }
-    }
-
-    candidates.sort(
-      (a, b) =>
-        b.score -
-        a.score
-    );
-
-    /*
-     * Spatially distributed non-maximum suppression.
-     */
-
-    const selected = [];
-
-    const minimumDistance =
-      Math.max(
-        10,
-        Math.round(
-          Math.min(
-            width,
-            height
-          ) / 48
-        )
-      );
-
-    for (
-      const candidate of
-      candidates
-    ) {
-      let accepted =
-        true;
-
-      for (
-        const existing of
-        selected
-      ) {
-        const distance =
-          Math.hypot(
-            candidate.x -
-            existing.x,
-
-            candidate.y -
-            existing.y
-          );
-
-        if (
-          distance <
-          minimumDistance
-        ) {
-          accepted =
-            false;
-          break;
-        }
-      }
-
-      if (!accepted) {
-        continue;
-      }
-
-      selected.push(
-        candidate
-      );
-
-      if (
-        selected.length >=
-        MAX_KEYPOINTS
-      ) {
-        break;
-      }
-    }
-
-    return selected;
-  }
-
-  /* ============================================================
-     ENHANCED DESCRIPTOR
-     ============================================================ */
-
-  function describeFeature(
-    image,
-    point
-  ) {
-    const {
-      gray,
-      width,
-      height
-    } = image;
-
-    const radius =
-      PATCH_RADIUS + 3;
-
-    if (
-      point.x < radius ||
-      point.y < radius ||
-      point.x >=
-        width - radius ||
-      point.y >=
-        height - radius
-    ) {
-      return null;
-    }
-
-    /*
-     * Dominant local orientation.
-     */
-
-    let directionX = 0;
-    let directionY = 0;
-
-    for (
-      let y = -8;
-      y <= 8;
-      y += 2
-    ) {
-      for (
-        let x = -8;
-        x <= 8;
-        x += 2
-      ) {
-        const [
-          gx,
-          gy
-        ] =
-          gradientAt(
-            gray,
-            width,
-            height,
-            point.x + x,
-            point.y + y
-          );
-
-        const magnitude =
-          Math.hypot(
-            gx,
-            gy
-          );
-
-        directionX +=
-          gx * magnitude;
-
-        directionY +=
-          gy * magnitude;
-      }
-    }
-
-    const angle =
-      Math.atan2(
-        directionY,
-        directionX
-      );
-
-    const cos =
-      Math.cos(angle);
-
-    const sin =
-      Math.sin(angle);
-
-    const descriptor = [];
-
-    /*
-     * Rotated normalized intensity patch.
-     */
-
-    for (
-      let y = -10;
-      y <= 10;
-      y += DESCRIPTOR_STEP
-    ) {
-      for (
-        let x = -10;
-        x <= 10;
-        x += DESCRIPTOR_STEP
-      ) {
-        const rx =
-          Math.round(
-            point.x +
-            x * cos -
-            y * sin
-          );
-
-        const ry =
-          Math.round(
-            point.y +
-            x * sin +
-            y * cos
-          );
-
-        if (
-          rx < 0 ||
-          ry < 0 ||
-          rx >= width ||
-          ry >= height
-        ) {
-          return null;
-        }
-
-        descriptor.push(
-          gray[
-            ry * width +
-            rx
-          ] / 255
-        );
-      }
-    }
-
-    /*
-     * Gradient orientation samples.
-     */
-
-    for (
-      let y = -8;
-      y <= 8;
-      y += 4
-    ) {
-      for (
-        let x = -8;
-        x <= 8;
-        x += 4
-      ) {
-        const rx =
-          Math.round(
-            point.x +
-            x * cos -
-            y * sin
-          );
-
-        const ry =
-          Math.round(
-            point.y +
-            x * sin +
-            y * cos
-          );
-
-        const [
-          gx,
-          gy
-        ] =
-          gradientAt(
-            gray,
-            width,
-            height,
-            rx,
-            ry
-          );
-
-        const magnitude =
-          Math.hypot(
-            gx,
-            gy
-          );
-
-        const orientation =
-          Math.atan2(
-            gy,
-            gx
-          ) -
-          angle;
-
-        descriptor.push(
-          Math.cos(
-            orientation
-          ) *
-          magnitude /
-          255
-        );
-
-        descriptor.push(
-          Math.sin(
-            orientation
-          ) *
-          magnitude /
-          255
-        );
-      }
-    }
-
-    /*
-     * Zero mean + L2 normalization.
-     */
-
-    let mean = 0;
-
-    for (
-      const value of
-      descriptor
-    ) {
-      mean += value;
-    }
-
-    mean /=
-      descriptor.length;
-
-    for (
-      let i = 0;
-      i < descriptor.length;
-      i++
-    ) {
-      descriptor[i] -=
-        mean;
-    }
-
-    let norm = 0;
-
-    for (
-      const value of
-      descriptor
-    ) {
-      norm +=
-        value * value;
-    }
-
-    norm =
-      Math.sqrt(norm) ||
-      1;
-
-    for (
-      let i = 0;
-      i < descriptor.length;
-      i++
-    ) {
-      descriptor[i] /=
-        norm;
-    }
-
-    return {
-      descriptor,
-      angle
-    };
-  }
-
-  function extractFeatures(image) {
-    const points =
-      detectFeatures(
-        image
-      );
-
-    const features = [];
-
-    for (
-      const point of
-      points
-    ) {
-      const descriptor =
-        describeFeature(
-          image,
-          point
-        );
-
-      if (!descriptor) {
-        continue;
-      }
-
-      features.push({
-        x:
-          point.x,
-
-        y:
-          point.y,
-
-        score:
-          point.score,
-
-        descriptor:
-          descriptor.descriptor,
-
-        angle:
-          descriptor.angle
-      });
-    }
-
-    return features;
-  }
-
-  /* ============================================================
-     DESCRIPTOR DISTANCE
-     ============================================================ */
-
-  function descriptorDistance(
-    a,
-    b
-  ) {
-    let sum = 0;
-
-    const length =
-      Math.min(
-        a.length,
-        b.length
-      );
-
-    for (
-      let i = 0;
-      i < length;
-      i++
-    ) {
-      const d =
-        a[i] -
-        b[i];
-
-      sum +=
-        d * d;
-    }
-
-    return Math.sqrt(
-      sum /
-      length
-    );
-  }
-
-  /* ============================================================
-     ADAPTIVE FEATURE MATCHING
-     ============================================================ */
-
-  function matchFeatures(
-    featuresA,
-    featuresB
-  ) {
-    const A =
-      featuresA
-        .slice()
-        .sort(
-          (a, b) =>
-            b.score -
-            a.score
-        )
-        .slice(
-          0,
-          MAX_MATCH_FEATURES
-        );
-
-    const B =
-      featuresB
-        .slice()
-        .sort(
-          (a, b) =>
-            b.score -
-            a.score
-        )
-        .slice(
-          0,
-          MAX_MATCH_FEATURES
-        );
-
-    if (
-      A.length < 4 ||
-      B.length < 4
-    ) {
-      return [];
-    }
-
-    /*
-     * Estimate descriptor noise.
-     */
-
-    const roughDistances = [];
-
-    for (
-      let i = 0;
-      i < Math.min(
-        A.length,
-        80
-      );
-      i++
-    ) {
-      let best =
-        Infinity;
-
-      for (
-        let j = 0;
-        j < Math.min(
-          B.length,
-          80
-        );
-        j++
-      ) {
-        const d =
-          descriptorDistance(
-            A[i].descriptor,
-            B[j].descriptor
-          );
-
-        if (
-          d < best
-        ) {
-          best = d;
-        }
-      }
-
-      if (
-        Number.isFinite(best)
-      ) {
-        roughDistances.push(
-          best
-        );
-      }
-    }
-
-    roughDistances.sort(
-      (a, b) =>
-        a - b
-    );
-
-    const medianNoise =
-      roughDistances.length
-        ? roughDistances[
-            Math.floor(
-              roughDistances.length /
-              2
-            )
-          ]
-        : 0.25;
-
-    const adaptiveRatio =
-      clamp(
-        BASE_RATIO +
-        (
-          0.28 -
-          medianNoise
-        ) *
-        0.18,
-        MIN_RATIO,
-        MAX_RATIO
-      );
-
-    const forward = [];
-
-    for (
-      let i = 0;
-      i < A.length;
-      i++
-    ) {
-      let best =
-        Infinity;
-
-      let second =
-        Infinity;
-
-      let bestIndex =
-        -1;
-
-      for (
-        let j = 0;
-        j < B.length;
-        j++
-      ) {
-        const distance =
-          descriptorDistance(
-            A[i].descriptor,
-            B[j].descriptor
-          );
-
-        if (
-          distance <
-          best
-        ) {
-          second =
-            best;
-
-          best =
-            distance;
-
-          bestIndex =
-            j;
-
-        } else if (
-          distance <
-          second
-        ) {
-          second =
-            distance;
-        }
-      }
-
-      if (
-        bestIndex < 0 ||
-        !Number.isFinite(
-          second
-        )
-      ) {
-        continue;
-      }
-
-      const ratio =
-        second > 1e-8
-          ? best /
-            second
-          : 1;
-
-      /*
-       * Both ratio and absolute descriptor distance
-       * must be reasonable.
-       */
-
-      const absoluteLimit =
-        Math.max(
-          0.24,
-          medianNoise *
-          1.85
-        );
-
-      if (
-        ratio <
-          adaptiveRatio &&
-        best <
-          absoluteLimit
-      ) {
-        forward.push({
-          ai: i,
-          bi: bestIndex,
-          ratio,
-          distance: best
+    function nextFrame() {
+        return new Promise(resolve => {
+            requestAnimationFrame(() => resolve());
         });
-      }
     }
 
-    /*
-     * Reverse nearest-neighbour map.
-     */
-
-    const reverse =
-      new Map();
-
-    for (
-      let j = 0;
-      j < B.length;
-      j++
-    ) {
-      let best =
-        Infinity;
-
-      let bestIndex =
-        -1;
-
-      for (
-        let i = 0;
-        i < A.length;
-        i++
-      ) {
-        const distance =
-          descriptorDistance(
-            B[j].descriptor,
-            A[i].descriptor
-          );
-
-        if (
-          distance <
-          best
-        ) {
-          best =
-            distance;
-
-          bestIndex =
-            i;
-        }
-      }
-
-      if (
-        bestIndex >= 0
-      ) {
-        reverse.set(
-          j,
-          bestIndex
-        );
-      }
+    function formatTime(ms) {
+        if (ms < 1000) return `${Math.round(ms)} ms`;
+        return `${(ms / 1000).toFixed(1)} sec`;
     }
 
-    /*
-     * Mutual matching.
-     */
+    function distanceSquared(a, b) {
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        return dx * dx + dy * dy;
+    }
 
-    const mutual =
-      forward.filter(
-        match =>
-          reverse.get(
-            match.bi
-          ) ===
-          match.ai
-      );
+    /* ============================================================
+       PIPELINE UI
+       ============================================================ */
 
-    /*
-     * Sort strongest matches first.
-     */
+    function resetPipeline() {
+        PIPELINE.forEach(id => {
+            const el = $(id);
+            if (!el) return;
 
-    mutual.sort(
-      (a, b) =>
-        a.ratio -
-        b.ratio
-    );
+            el.classList.remove("active");
+            el.classList.remove("complete");
+            el.classList.remove("error");
+        });
+    }
 
-    return mutual.map(
-      match => ({
-        ai:
-          featuresA.indexOf(
-            A[match.ai]
-          ),
+    function setPipelineActive(id) {
+        const el = $(id);
+        if (!el) return;
 
-        bi:
-          featuresB.indexOf(
-            B[match.bi]
-          ),
+        el.classList.add("active");
+        el.classList.remove("complete");
+        el.classList.remove("error");
+    }
 
-        distance:
-          match.distance,
+    function setPipelineComplete(id) {
+        const el = $(id);
+        if (!el) return;
 
-        ratio:
-          match.ratio
-      })
-    );
-  }
+        el.classList.remove("active");
+        el.classList.remove("error");
+        el.classList.add("complete");
+    }
 
-  /* ============================================================
-     AFFINE MODEL SOLVER
-     ============================================================ */
+    function setPipelineError(id) {
+        const el = $(id);
+        if (!el) return;
 
-  function solveAffine(
-    p1,
-    p2,
-    p3,
-    q1,
-    q2,
-    q3
-  ) {
-    const matrix = [
-      [p1.x, p1.y, 1],
-      [p2.x, p2.y, 1],
-      [p3.x, p3.y, 1]
-    ];
+        el.classList.remove("active");
+        el.classList.remove("complete");
+        el.classList.add("error");
+    }
 
-    const targetX = [
-      q1.x,
-      q2.x,
-      q3.x
-    ];
+    /* ============================================================
+       RESULT RESET
+       ============================================================ */
 
-    const targetY = [
-      q1.y,
-      q2.y,
-      q3.y
-    ];
+    function resetResults() {
+        const defaults = {
+            score: "—",
+            features: "—",
+            confidence: "—",
+            quality: "—",
+            time: "—",
 
-    function gaussian(
-      source,
-      target
-    ) {
-      const M =
-        source.map(
-          (row, index) =>
-            [
-              ...row,
-              target[index]
-            ]
+            resolutionA: "—",
+            keypointsA: "—",
+            contrastA: "—",
+            sharpnessA: "—",
+            qualityScoreA: "—",
+
+            resolutionB: "—",
+            keypointsB: "—",
+            contrastB: "—",
+            sharpnessB: "—",
+            qualityScoreB: "—",
+
+            rawMatches: "—",
+            candidateMatches: "—",
+            verifiedMatches: "—",
+            featureCoverage: "—",
+            correspondenceStrength: "—",
+
+            inlierRatio: "—",
+            geometricConsistency: "—",
+            homographyStatus: "—",
+            verificationStatus: "—"
+        };
+
+        Object.entries(defaults).forEach(([id, value]) => {
+            setText(id, value);
+        });
+
+        setText(
+            "status",
+            "READY — Upload two lunar images to begin correspondence analysis."
         );
 
-      for (
-        let column = 0;
-        column < 3;
-        column++
-      ) {
-        let pivot =
-          column;
+        const map = $("correspondenceMap");
+        const placeholder = $("visualPlaceholder");
 
-        for (
-          let row =
-            column + 1;
-          row < 3;
-          row++
-        ) {
-          if (
-            Math.abs(
-              M[row][column]
-            ) >
-            Math.abs(
-              M[pivot][column]
-            )
-          ) {
-            pivot =
-              row;
-          }
+        if (map) {
+            map.innerHTML = "";
+            map.style.display = "none";
         }
 
-        if (
-          Math.abs(
-            M[pivot][column]
-          ) <
-          1e-8
-        ) {
-          return null;
+        if (placeholder) {
+            placeholder.style.display = "";
         }
 
-        [
-          M[column],
-          M[pivot]
-        ] =
-        [
-          M[pivot],
-          M[column]
+        setText(
+            "visualNote",
+            "LOCAL FEATURES + RANSAC"
+        );
+
+        setText(
+            "interpretation",
+            "Upload two compatible lunar images and run the analysis engine."
+        );
+
+        setDisabled("downloadReportBtn", true);
+
+        resetPipeline();
+    }
+
+    /* ============================================================
+       FILE VALIDATION
+       ============================================================ */
+
+    function validateImageFile(file) {
+        if (!file) {
+            throw new Error("No image file selected.");
+        }
+
+        const allowed = [
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/bmp",
+            "image/tiff"
         ];
 
-        const divisor =
-          M[column][column];
+        const extension = file.name
+            .split(".")
+            .pop()
+            .toLowerCase();
 
-        for (
-          let c =
-            column;
-          c < 4;
-          c++
+        const allowedExtensions = [
+            "jpg",
+            "jpeg",
+            "png",
+            "webp",
+            "bmp",
+            "tif",
+            "tiff"
+        ];
+
+        if (
+            !allowed.includes(file.type) &&
+            !allowedExtensions.includes(extension)
         ) {
-          M[column][c] /=
-            divisor;
+            throw new Error(
+                "Unsupported image format. Use JPG, PNG, WEBP, BMP or TIFF."
+            );
         }
 
-        for (
-          let row = 0;
-          row < 3;
-          row++
-        ) {
-          if (
-            row ===
-            column
-          ) {
-            continue;
-          }
-
-          const factor =
-            M[row][column];
-
-          for (
-            let c =
-              column;
-            c < 4;
-            c++
-          ) {
-            M[row][c] -=
-              factor *
-              M[column][c];
-          }
+        if (file.size > 25 * 1024 * 1024) {
+            throw new Error(
+                "Image is too large. Maximum supported size is 25 MB."
+            );
         }
-      }
-
-      return [
-        M[0][3],
-        M[1][3],
-        M[2][3]
-      ];
     }
 
-    const X =
-      gaussian(
-        matrix,
-        targetX
-      );
+    /* ============================================================
+       IMAGE LOADING
+       ============================================================ */
 
-    const Y =
-      gaussian(
-        matrix,
-        targetY
-      );
+    function readFileAsDataURL(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
 
-    if (
-      !X ||
-      !Y
-    ) {
-      return null;
+            reader.onload = () => resolve(reader.result);
+
+            reader.onerror = () => {
+                reject(new Error("Unable to read the selected image."));
+            };
+
+            reader.readAsDataURL(file);
+        });
     }
 
-    return {
-      a: X[0],
-      b: X[1],
-      c: X[2],
+    function loadImage(dataURL) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
 
-      d: Y[0],
-      e: Y[1],
-      f: Y[2]
-    };
-  }
+            img.onload = () => resolve(img);
 
-  function transform(
-    model,
-    point
-  ) {
-    return {
-      x:
-        model.a *
-          point.x +
-        model.b *
-          point.y +
-        model.c,
+            img.onerror = () => {
+                reject(new Error("Unable to decode image."));
+            };
 
-      y:
-        model.d *
-          point.x +
-        model.e *
-          point.y +
-        model.f
-    };
-  }
-
-  function triangleArea(
-    a,
-    b,
-    c
-  ) {
-    return Math.abs(
-      (
-        b.x -
-        a.x
-      ) *
-      (
-        c.y -
-        a.y
-      ) -
-
-      (
-        b.y -
-        a.y
-      ) *
-      (
-        c.x -
-        a.x
-      )
-    );
-  }
-
-  /* ============================================================
-     RANSAC GEOMETRIC VERIFICATION
-     ============================================================ */
-
-  function verifyGeometry(
-    matches,
-    featuresA,
-    featuresB
-  ) {
-    if (
-      matches.length <
-      4
-    ) {
-      return {
-        model: null,
-        inliers: [],
-        ratio: 0,
-        consistency: 0,
-        medianError: Infinity
-      };
+            img.src = dataURL;
+        });
     }
 
-    let bestModel =
-      null;
+    async function imageToGray(file) {
+        validateImageFile(file);
 
-    let bestInliers =
-      [];
+        const dataURL = await readFileAsDataURL(file);
+        const img = await loadImage(dataURL);
 
-    let bestError =
-      Infinity;
+        let width = img.naturalWidth;
+        let height = img.naturalHeight;
 
-    for (
-      let iteration = 0;
-      iteration <
-      RANSAC_ITERATIONS;
-      iteration++
-    ) {
-      const i1 =
-        Math.floor(
-          Math.random() *
-          matches.length
+        const scale = Math.min(
+            1,
+            CONFIG.MAX_IMAGE_DIMENSION / Math.max(width, height)
         );
 
-      let i2 =
-        Math.floor(
-          Math.random() *
-          matches.length
+        width = Math.max(1, Math.round(width * scale));
+        height = Math.max(1, Math.round(height * scale));
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext("2d", {
+            willReadFrequently: true
+        });
+
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const rgba = ctx.getImageData(
+            0,
+            0,
+            width,
+            height
+        ).data;
+
+        const gray = new Float32Array(width * height);
+
+        for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
+            gray[i] =
+                0.299 * rgba[p] +
+                0.587 * rgba[p + 1] +
+                0.114 * rgba[p + 2];
+        }
+
+        return {
+            data: gray,
+            width,
+            height,
+            originalWidth: img.naturalWidth,
+            originalHeight: img.naturalHeight,
+            dataURL
+        };
+    }
+
+    /* ============================================================
+       RESIZING
+       ============================================================ */
+
+    function resizeGray(image, maxDimension) {
+        if (
+            Math.max(image.width, image.height) <= maxDimension
+        ) {
+            return image;
+        }
+
+        const scale =
+            maxDimension /
+            Math.max(image.width, image.height);
+
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+
+        const output = new Float32Array(width * height);
+
+        for (let y = 0; y < height; y++) {
+            const sy =
+                (y / Math.max(1, height - 1)) *
+                (image.height - 1);
+
+            const y0 = Math.floor(sy);
+            const y1 = Math.min(image.height - 1, y0 + 1);
+            const fy = sy - y0;
+
+            for (let x = 0; x < width; x++) {
+                const sx =
+                    (x / Math.max(1, width - 1)) *
+                    (image.width - 1);
+
+                const x0 = Math.floor(sx);
+                const x1 = Math.min(image.width - 1, x0 + 1);
+                const fx = sx - x0;
+
+                const a =
+                    image.data[y0 * image.width + x0];
+
+                const b =
+                    image.data[y0 * image.width + x1];
+
+                const c =
+                    image.data[y1 * image.width + x0];
+
+                const d =
+                    image.data[y1 * image.width + x1];
+
+                const top = a + (b - a) * fx;
+                const bottom = c + (d - c) * fx;
+
+                output[y * width + x] =
+                    top + (bottom - top) * fy;
+            }
+        }
+
+        return {
+            ...image,
+            data: output,
+            width,
+            height
+        };
+    }
+
+    /* ============================================================
+       PERCENTILE
+       ============================================================ */
+
+    function percentile(values, q) {
+        if (!values.length) return 0;
+
+        const sampleLimit = 12000;
+
+        let sample;
+
+        if (values.length <= sampleLimit) {
+            sample = Array.from(values);
+        } else {
+            sample = [];
+
+            const step = values.length / sampleLimit;
+
+            for (let i = 0; i < sampleLimit; i++) {
+                sample.push(
+                    values[Math.floor(i * step)]
+                );
+            }
+        }
+
+        sample.sort((a, b) => a - b);
+
+        const index =
+            (sample.length - 1) * q;
+
+        const lower = Math.floor(index);
+        const upper = Math.ceil(index);
+
+        if (lower === upper) {
+            return sample[lower];
+        }
+
+        return (
+            sample[lower] +
+            (sample[upper] - sample[lower]) *
+            (index - lower)
+        );
+    }
+
+    /* ============================================================
+       LOCAL NORMALIZATION
+       ============================================================ */
+
+    function localNormalize(image) {
+        image = resizeGray(
+            image,
+            CONFIG.WORK_MAX_DIMENSION
         );
 
-      let i3 =
-        Math.floor(
-          Math.random() *
-          matches.length
+        const width = image.width;
+        const height = image.height;
+        const n = width * height;
+
+        const normalized = new Float32Array(n);
+
+        const integral = new Float64Array(
+            (width + 1) * (height + 1)
         );
 
-      if (
-        i2 === i1
-      ) {
-        i2 =
-          (
-            i2 + 1
-          ) %
-          matches.length;
-      }
-
-      if (
-        i3 === i1 ||
-        i3 === i2
-      ) {
-        i3 =
-          (
-            i3 + 2
-          ) %
-          matches.length;
-      }
-
-      const m1 =
-        matches[i1];
-
-      const m2 =
-        matches[i2];
-
-      const m3 =
-        matches[i3];
-
-      const p1 =
-        featuresA[m1.ai];
-
-      const p2 =
-        featuresA[m2.ai];
-
-      const p3 =
-        featuresA[m3.ai];
-
-      const q1 =
-        featuresB[m1.bi];
-
-      const q2 =
-        featuresB[m2.bi];
-
-      const q3 =
-        featuresB[m3.bi];
-
-      /*
-       * Reject degenerate triangles.
-       */
-
-      if (
-        triangleArea(
-          p1,
-          p2,
-          p3
-        ) <
-        80
-      ) {
-        continue;
-      }
-
-      if (
-        triangleArea(
-          q1,
-          q2,
-          q3
-        ) <
-        80
-      ) {
-        continue;
-      }
-
-      const model =
-        solveAffine(
-          p1,
-          p2,
-          p3,
-          q1,
-          q2,
-          q3
+        const integralSq = new Float64Array(
+            (width + 1) * (height + 1)
         );
 
-      if (!model) {
-        continue;
-      }
+        for (let y = 1; y <= height; y++) {
+            let rowSum = 0;
+            let rowSq = 0;
 
-      /*
-       * Reject absurd transformations.
-       */
+            for (let x = 1; x <= width; x++) {
+                const value =
+                    image.data[
+                        (y - 1) * width + (x - 1)
+                    ];
 
-      const determinant =
-        model.a *
-          model.e -
-        model.b *
-          model.d;
+                rowSum += value;
+                rowSq += value * value;
 
-      if (
-        Math.abs(
-          determinant
-        ) <
-        0.15 ||
-        Math.abs(
-          determinant
-        ) >
-        6
-      ) {
-        continue;
-      }
+                const index =
+                    y * (width + 1) + x;
 
-      const inliers =
-        [];
+                integral[index] =
+                    integral[index - (width + 1)] +
+                    rowSum;
 
-      let totalError =
-        0;
+                integralSq[index] =
+                    integralSq[index - (width + 1)] +
+                    rowSq;
+            }
+        }
 
-      for (
-        const match of
-        matches
-      ) {
-        const source =
-          featuresA[
-            match.ai
-          ];
+        const radius = 6;
 
-        const target =
-          featuresB[
-            match.bi
-          ];
+        function regionSum(buffer, x0, y0, x1, y1) {
+            return (
+                buffer[y1 * (width + 1) + x1] -
+                buffer[y0 * (width + 1) + x1] -
+                buffer[y1 * (width + 1) + x0] +
+                buffer[y0 * (width + 1) + x0]
+            );
+        }
 
-        const predicted =
-          transform(
-            model,
-            source
-          );
+        for (let y = 0; y < height; y++) {
+            const y0 = Math.max(0, y - radius);
+            const y1 = Math.min(height - 1, y + radius);
 
-        const error =
-          Math.hypot(
-            predicted.x -
-              target.x,
+            for (let x = 0; x < width; x++) {
+                const x0 = Math.max(0, x - radius);
+                const x1 = Math.min(width - 1, x + radius);
 
-            predicted.y -
-              target.y
-          );
+                const rx0 = x0;
+                const ry0 = y0;
+                const rx1 = x1 + 1;
+                const ry1 = y1 + 1;
+
+                const count =
+                    (rx1 - rx0) *
+                    (ry1 - ry0);
+
+                const sum = regionSum(
+                    integral,
+                    rx0,
+                    ry0,
+                    rx1,
+                    ry1
+                );
+
+                const sq = regionSum(
+                    integralSq,
+                    rx0,
+                    ry0,
+                    rx1,
+                    ry1
+                );
+
+                const mean = sum / count;
+
+                const variance = Math.max(
+                    4,
+                    sq / count - mean * mean
+                );
+
+                const index =
+                    y * width + x;
+
+                normalized[index] =
+                    (image.data[index] - mean) /
+                    Math.sqrt(variance);
+            }
+        }
 
         /*
-         * Slightly weighted threshold:
-         * very strong descriptor matches get a little
-         * more tolerance.
+         * Mild smoothing removes single-pixel noise while
+         * preserving crater/ridge boundaries.
          */
+        const smoothed = new Float32Array(n);
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const center =
+                    normalized[y * width + x];
+
+                const left =
+                    normalized[
+                        y * width +
+                        Math.max(0, x - 1)
+                    ];
+
+                const right =
+                    normalized[
+                        y * width +
+                        Math.min(width - 1, x + 1)
+                    ];
+
+                const up =
+                    normalized[
+                        Math.max(0, y - 1) * width + x
+                    ];
+
+                const down =
+                    normalized[
+                        Math.min(height - 1, y + 1) * width + x
+                    ];
+
+                smoothed[y * width + x] =
+                    center * 0.50 +
+                    (left + right + up + down) * 0.125;
+            }
+        }
+
+        return {
+            ...image,
+            data: smoothed
+        };
+    }
+
+    /* ============================================================
+       IMAGE QUALITY
+       ============================================================ */
+
+    function imageQuality(image) {
+        const data = image.data;
+        const n = data.length;
+
+        let sum = 0;
+        let sumSq = 0;
+
+        for (let i = 0; i < n; i++) {
+            sum += data[i];
+            sumSq += data[i] * data[i];
+        }
+
+        const mean = sum / n;
+        const variance =
+            Math.max(0, sumSq / n - mean * mean);
+
+        const contrast = Math.sqrt(variance);
+
+        let sharpnessSum = 0;
+        let sharpnessCount = 0;
+
+        for (let y = 1; y < image.height - 1; y++) {
+            for (let x = 1; x < image.width - 1; x++) {
+                const i =
+                    y * image.width + x;
+
+                const lap =
+                    image.data[i - image.width] +
+                    image.data[i - 1] +
+                    image.data[i + 1] +
+                    image.data[i + image.width] -
+                    4 * image.data[i];
+
+                sharpnessSum += lap * lap;
+                sharpnessCount++;
+            }
+        }
+
+        const sharpness =
+            sharpnessCount
+                ? sharpnessSum / sharpnessCount
+                : 0;
+
+        const p05 = percentile(data, 0.05);
+        const p95 = percentile(data, 0.95);
+
+        const dynamicRange = p95 - p05;
+
+        const contrastScore =
+            clamp((contrast / 55) * 100, 0, 100);
+
+        const sharpnessScore =
+            clamp(
+                (Math.log1p(sharpness) /
+                    Math.log1p(5000)) *
+                100,
+                0,
+                100
+            );
+
+        const rangeScore =
+            clamp((dynamicRange / 4.0) * 100, 0, 100);
+
+        const qualityScore =
+            contrastScore * 0.35 +
+            sharpnessScore * 0.40 +
+            rangeScore * 0.25;
+
+        return {
+            mean,
+            variance,
+            contrast,
+            sharpness,
+            dynamicRange,
+            qualityScore: clamp(qualityScore, 0, 100)
+        };
+    }
+
+    /* ============================================================
+       GRADIENT
+       ============================================================ */
+
+    function gradientAt(image, x, y) {
+        const width = image.width;
+        const height = image.height;
+
+        x = clamp(x, 1, width - 2);
+        y = clamp(y, 1, height - 2);
+
+        const left =
+            image.data[y * width + x - 1];
+
+        const right =
+            image.data[y * width + x + 1];
+
+        const up =
+            image.data[(y - 1) * width + x];
+
+        const down =
+            image.data[(y + 1) * width + x];
+
+        return {
+            gx: (right - left) * 0.5,
+            gy: (down - up) * 0.5
+        };
+    }
+
+    /* ============================================================
+       FEATURE DETECTION
+       ============================================================ */
+
+    function detectFeatures(image) {
+        const width = image.width;
+        const height = image.height;
+
+        const candidates = [];
+
+        /*
+         * Estimate image contrast so the detector adapts
+         * automatically between bright/dark lunar imagery.
+         */
+        let sum = 0;
+        let sq = 0;
+
+        for (let i = 0; i < image.data.length; i++) {
+            const v = image.data[i];
+            sum += v;
+            sq += v * v;
+        }
+
+        const mean =
+            sum / image.data.length;
+
+        const variance =
+            Math.max(
+                1,
+                sq / image.data.length -
+                mean * mean
+            );
+
+        const sigma = Math.sqrt(variance);
 
         const threshold =
-          match.ratio <
-          0.78
-            ? RANSAC_ERROR_PIXELS +
-              1.5
-            : RANSAC_ERROR_PIXELS;
+            clamp(sigma * 0.55, 7, 22);
 
-        if (
-          error <=
-          threshold
+        const radius = 3;
+
+        const circle = [
+            [0, -3],
+            [1, -3],
+            [2, -2],
+            [3, -1],
+            [3, 0],
+            [3, 1],
+            [2, 2],
+            [1, 3],
+            [0, 3],
+            [-1, 3],
+            [-2, 2],
+            [-3, 1],
+            [-3, 0],
+            [-3, -1],
+            [-2, -2],
+            [-1, -3]
+        ];
+
+        for (
+            let y = radius + 1;
+            y < height - radius - 1;
+            y++
         ) {
-          inliers.push(
-            match
-          );
-
-          totalError +=
-            error;
-        }
-      }
-
-      const meanError =
-        inliers.length
-          ? totalError /
-            inliers.length
-          : Infinity;
-
-      /*
-       * Primary objective = inlier count.
-       * Secondary objective = geometric error.
-       */
-
-      if (
-        inliers.length >
-          bestInliers.length ||
-        (
-          inliers.length ===
-            bestInliers.length &&
-          meanError <
-            bestError
-        )
-      ) {
-        bestInliers =
-          inliers;
-
-        bestModel =
-          model;
-
-        bestError =
-          meanError;
-      }
-    }
-
-    if (
-      !bestModel ||
-      !bestInliers.length
-    ) {
-      return {
-        model: null,
-        inliers: [],
-        ratio: 0,
-        consistency: 0,
-        medianError: Infinity
-      };
-    }
-
-    const errors =
-      [];
-
-    for (
-      const match of
-      bestInliers
-    ) {
-      const source =
-        featuresA[
-          match.ai
-        ];
-
-      const target =
-        featuresB[
-          match.bi
-        ];
-
-      const predicted =
-        transform(
-          bestModel,
-          source
-        );
-
-      errors.push(
-        Math.hypot(
-          predicted.x -
-            target.x,
-
-          predicted.y -
-            target.y
-        )
-      );
-    }
-
-    errors.sort(
-      (a, b) =>
-        a - b
-    );
-
-    const medianError =
-      errors[
-        Math.floor(
-          errors.length /
-          2
-        )
-      ];
-
-    const ratio =
-      bestInliers.length /
-      matches.length;
-
-    const consistency =
-      clamp(
-        100 -
-        medianError *
-        10,
-        0,
-        100
-      );
-
-    return {
-      model:
-        bestModel,
-
-      inliers:
-        bestInliers,
-
-      ratio,
-
-      consistency,
-
-      medianError
-    };
-  }
-
-  /* ============================================================
-     SPATIAL COVERAGE
-     ============================================================ */
-
-  function calculateCoverage(
-    inliers,
-    features,
-    width,
-    height
-  ) {
-    if (
-      !inliers.length
-    ) {
-      return 0;
-    }
-
-    const occupied =
-      new Set();
-
-    for (
-      const match of
-      inliers
-    ) {
-      const point =
-        features[
-          match.ai
-        ];
-
-      const gx =
-        clamp(
-          Math.floor(
-            point.x /
-            width *
-            GRID_SIZE
-          ),
-          0,
-          GRID_SIZE - 1
-        );
-
-      const gy =
-        clamp(
-          Math.floor(
-            point.y /
-            height *
-            GRID_SIZE
-          ),
-          0,
-          GRID_SIZE - 1
-        );
-
-      occupied.add(
-        `${gx}:${gy}`
-      );
-    }
-
-    return (
-      occupied.size /
-      (
-        GRID_SIZE *
-        GRID_SIZE
-      ) *
-      100
-    );
-  }
-
-  /* ============================================================
-     MATCH QUALITY
-     ============================================================ */
-
-  function calculateMatchQuality(
-    matches
-  ) {
-    if (
-      !matches.length
-    ) {
-      return 0;
-    }
-
-    let sum = 0;
-
-    for (
-      const match of
-      matches
-    ) {
-      /*
-       * Lower ratio = stronger match.
-       */
-
-      sum +=
-        clamp(
-          (
-            1 -
-            match.ratio
-          ) *
-          100,
-          0,
-          100
-        );
-    }
-
-    return (
-      sum /
-      matches.length
-    );
-  }
-
-  /* ============================================================
-     SCORE
-     ============================================================ */
-
-  function calculateScore(
-    metricsA,
-    metricsB,
-    featuresA,
-    featuresB,
-    matches,
-    verification,
-    width,
-    height
-  ) {
-    const verified =
-      verification.inliers.length;
-
-    const candidates =
-      matches.length;
-
-    const featureCount =
-      Math.max(
-        1,
-        Math.min(
-          featuresA.length,
-          featuresB.length
-        )
-      );
-
-    /*
-     * Correspondence density.
-     */
-
-    const correspondenceDensity =
-      clamp(
-        verified /
-        featureCount *
-        260,
-        0,
-        100
-      );
-
-    /*
-     * Geometric agreement.
-     */
-
-    const geometricScore =
-      clamp(
-        verification.ratio *
-        180,
-        0,
-        100
-      );
-
-    /*
-     * Spatial coverage.
-     */
-
-    const coverage =
-      calculateCoverage(
-        verification.inliers,
-        featuresA,
-        width,
-        height
-      );
-
-    /*
-     * Descriptor quality.
-     */
-
-    const matchQuality =
-      calculateMatchQuality(
-        verification.inliers
-      );
-
-    /*
-     * Image quality.
-     */
-
-    const quality =
-      (
-        metricsA.qualityScore +
-        metricsB.qualityScore
-      ) /
-      2;
-
-    /*
-     * Scale confidence:
-     * good results should have at least several
-     * distributed verified relationships.
-     */
-
-    const evidenceDepth =
-      clamp(
-        verified /
-        30 *
-        100,
-        0,
-        100
-      );
-
-    /*
-     * Final evidence score.
-     */
-
-    let score =
-      0.28 *
-        correspondenceDensity +
-
-      0.25 *
-        geometricScore +
-
-      0.17 *
-        verification.consistency +
-
-      0.12 *
-        coverage +
-
-      0.10 *
-        matchQuality +
-
-      0.05 *
-        quality +
-
-      0.03 *
-        evidenceDepth;
-
-    /*
-     * Hard evidence safeguards.
-     *
-     * These prevent a handful of accidental matches
-     * from generating an impressive confidence number.
-     */
-
-    if (
-      verified < 4
-    ) {
-      score =
-        Math.min(
-          score,
-          24
-        );
-    }
-
-    if (
-      verified < 6
-    ) {
-      score =
-        Math.min(
-          score,
-          39
-        );
-    }
-
-    if (
-      verified < 10
-    ) {
-      score =
-        Math.min(
-          score,
-          57
-        );
-    }
-
-    if (
-      verification.ratio <
-      0.12
-    ) {
-      score =
-        Math.min(
-          score,
-          48
-        );
-    }
-
-    if (
-      coverage < 12 &&
-      verified < 15
-    ) {
-      score =
-        Math.min(
-          score,
-          55
-        );
-    }
-
-    score =
-      clamp(
-        score,
-        0,
-        100
-      );
-
-    let classification =
-      "NO RELIABLE CORRESPONDENCE";
-
-    if (
-      verified >= 22 &&
-      score >= 80 &&
-      verification.ratio >= 0.36 &&
-      coverage >= 28 &&
-      verification.consistency >= 70
-    ) {
-      classification =
-        "STRONG CORRESPONDENCE";
-
-    } else if (
-      verified >= 14 &&
-      score >= 65 &&
-      verification.ratio >= 0.28 &&
-      coverage >= 20
-    ) {
-      classification =
-        "CORRESPONDENCE FOUND";
-
-    } else if (
-      verified >= 7 &&
-      score >= 48 &&
-      verification.ratio >= 0.20 &&
-      coverage >= 16
-    ) {
-      classification =
-        "POSSIBLE CORRESPONDENCE";
-    }
-
-    return {
-      score:
-        round(
-          score,
-          1
-        ),
-
-      verifiedMatches:
-        verified,
-
-      candidateMatches:
-        candidates,
-
-      featureCoverage:
-        round(
-          coverage,
-          1
-        ),
-
-      correspondenceStrength:
-        round(
-          correspondenceDensity,
-          1
-        ),
-
-      inlierRatio:
-        round(
-          verification.ratio *
-          100,
-          1
-        ),
-
-      geometricConsistency:
-        round(
-          verification.consistency,
-          1
-        ),
-
-      matchQuality:
-        round(
-          matchQuality,
-          1
-        ),
-
-      classification,
-
-      qualityScore:
-        round(
-          quality,
-          1
-        )
-    };
-  }
-
-  /* ============================================================
-     INTERPRETATION
-     ============================================================ */
-
-  function buildInterpretation(
-    result
-  ) {
-    if (
-      result.score >= 80
-    ) {
-      return (
-        `Strong visual correspondence detected. ` +
-        `${result.verifiedMatches} feature relationships ` +
-        `survived geometric verification with ` +
-        `${round(result.featureCoverage, 0)}% spatial coverage. ` +
-        `The verified relationships show ` +
-        `${round(result.geometricConsistency, 0)}% geometric ` +
-        `consistency, providing strong evidence of correspondence.`
-      );
-    }
-
-    if (
-      result.score >= 65
-    ) {
-      return (
-        `Meaningful lunar correspondence was detected. ` +
-        `${result.verifiedMatches} feature relationships ` +
-        `survived geometric filtering, with ` +
-        `${round(result.featureCoverage, 0)}% spatial coverage ` +
-        `and ${round(result.geometricConsistency, 0)}% geometric ` +
-        `consistency. The result provides supportive evidence ` +
-        `but should be reviewed using the correspondence map.`
-      );
-    }
-
-    if (
-      result.score >= 48
-    ) {
-      return (
-        `Potential local correspondence was detected, but the ` +
-        `evidence remains limited. ${result.verifiedMatches} ` +
-        `relationships survived geometric verification. ` +
-        `Differences in illumination, scale, viewpoint, focus, ` +
-        `or lunar surface appearance may be affecting the result.`
-      );
-    }
-
-    return (
-      `No reliable global correspondence was established. ` +
-      `The detected local similarities did not provide enough ` +
-      `consistent geometric evidence. Try higher-resolution, ` +
-      `well-focused images showing overlapping lunar terrain.`
-    );
-  }
-
-  /* ============================================================
-     VISUALIZATION
-     ============================================================ */
-
-  function createCorrespondenceMap(
-    featuresA,
-    featuresB,
-    inliers,
-    sourceA,
-    sourceB,
-    workA,
-    workB
-  ) {
-    const canvas =
-      document.createElement(
-        "canvas"
-      );
-
-    const gap = 12;
-
-    const maximumWidth =
-      1200;
-
-    const scale =
-      Math.min(
-        1,
-        maximumWidth /
-        (
-          sourceA.width +
-          sourceB.width +
-          gap
-        )
-      );
-
-    const widthA =
-      Math.round(
-        sourceA.width *
-        scale
-      );
-
-    const heightA =
-      Math.round(
-        sourceA.height *
-        scale
-      );
-
-    const widthB =
-      Math.round(
-        sourceB.width *
-        scale
-      );
-
-    const heightB =
-      Math.round(
-        sourceB.height *
-        scale
-      );
-
-    const height =
-      Math.max(
-        heightA,
-        heightB
-      );
-
-    canvas.width =
-      widthA +
-      widthB +
-      gap;
-
-    canvas.height =
-      height;
-
-    const context =
-      canvas.getContext(
-        "2d"
-      );
-
-    context.fillStyle =
-      "#080b12";
-
-    context.fillRect(
-      0,
-      0,
-      canvas.width,
-      canvas.height
-    );
-
-    context.drawImage(
-      sourceA.canvas,
-      0,
-      0,
-      widthA,
-      heightA
-    );
-
-    context.drawImage(
-      sourceB.canvas,
-      widthA +
-        gap,
-      0,
-      widthB,
-      heightB
-    );
-
-    const visualMatches =
-      inliers
-        .slice()
-        .sort(
-          (a, b) =>
-            a.distance -
-            b.distance
-        )
-        .slice(
-          0,
-          MAX_VISUAL_MATCHES
-        );
-
-    /*
-     * Feature coordinates belong to work images.
-     * Scale them properly to source images.
-     */
-
-    const scaleAX =
-      sourceA.width /
-      workA.width;
-
-    const scaleAY =
-      sourceA.height /
-      workA.height;
-
-    const scaleBX =
-      sourceB.width /
-      workB.width;
-
-    const scaleBY =
-      sourceB.height /
-      workB.height;
-
-    context.lineWidth =
-      1.2;
-
-    visualMatches.forEach(
-      (match, index) => {
-        const pointA =
-          featuresA[
-            match.ai
-          ];
-
-        const pointB =
-          featuresB[
-            match.bi
-          ];
-
-        const x1 =
-          pointA.x *
-          scaleAX *
-          scale;
-
-        const y1 =
-          pointA.y *
-          scaleAY *
-          scale;
-
-        const x2 =
-          widthA +
-          gap +
-          pointB.x *
-          scaleBX *
-          scale;
-
-        const y2 =
-          pointB.y *
-          scaleBY *
-          scale;
-
-        context.strokeStyle =
-          `hsl(${150 + index % 30}, 85%, 64%)`;
-
-        context.beginPath();
-
-        context.moveTo(
-          x1,
-          y1
-        );
-
-        context.lineTo(
-          x2,
-          y2
-        );
-
-        context.stroke();
-
-        context.fillStyle =
-          "#ffffff";
-
-        context.beginPath();
-
-        context.arc(
-          x1,
-          y1,
-          2.5,
-          0,
-          Math.PI * 2
-        );
-
-        context.fill();
-
-        context.beginPath();
-
-        context.arc(
-          x2,
-          y2,
-          2.5,
-          0,
-          Math.PI * 2
-        );
-
-        context.fill();
-      }
-    );
-
-    context.fillStyle =
-      "rgba(0,0,0,.65)";
-
-    context.fillRect(
-      0,
-      0,
-      140,
-      28
-    );
-
-    context.fillRect(
-      widthA +
-        gap,
-      0,
-      140,
-      28
-    );
-
-    context.fillStyle =
-      "#ffffff";
-
-    context.font =
-      "600 12px Inter, Arial, sans-serif";
-
-    context.fillText(
-      "IMAGE A",
-      12,
-      19
-    );
-
-    context.fillText(
-      "IMAGE B",
-      widthA +
-        gap +
-        12,
-      19
-    );
-
-    return canvas.toDataURL(
-      "image/jpeg",
-      0.88
-    );
-  }
-
-  /* ============================================================
-     DISPLAY RESULTS
-     ============================================================ */
-
-  function displayResults(
-    result
-  ) {
-    setText(
-      "status",
-      result.classification
-    );
-
-    setText(
-      "score",
-      `${result.score}%`
-    );
-
-    setText(
-      "features",
-      result.verifiedMatches
-    );
-
-    setText(
-      "confidence",
-      result.score >= 80
-        ? "HIGH"
-        : result.score >= 65
-          ? "MODERATE"
-          : result.score >= 48
-            ? "LIMITED"
-            : "LOW"
-    );
-
-    setText(
-      "quality",
-      result.qualityScore >= 80
-        ? "EXCELLENT"
-        : result.qualityScore >= 65
-          ? "GOOD"
-          : "FAIR"
-    );
-
-    setText(
-      "time",
-      formatTime(
-        result.processingMs
-      )
-    );
-
-    setText(
-      "resolutionA",
-      result.metricsA.resolution
-    );
-
-    setText(
-      "keypointsA",
-      result.featuresACount
-    );
-
-    setText(
-      "contrastA",
-      result.metricsA.contrast
-    );
-
-    setText(
-      "sharpnessA",
-      result.metricsA.sharpness
-    );
-
-    setText(
-      "qualityScoreA",
-      `${result.metricsA.qualityScore}/100`
-    );
-
-    setText(
-      "resolutionB",
-      result.metricsB.resolution
-    );
-
-    setText(
-      "keypointsB",
-      result.featuresBCount
-    );
-
-    setText(
-      "contrastB",
-      result.metricsB.contrast
-    );
-
-    setText(
-      "sharpnessB",
-      result.metricsB.sharpness
-    );
-
-    setText(
-      "qualityScoreB",
-      `${result.metricsB.qualityScore}/100`
-    );
-
-    setText(
-      "rawMatches",
-      result.rawFeatureComparisons
-    );
-
-    setText(
-      "candidateMatches",
-      result.candidateMatches
-    );
-
-    setText(
-      "verifiedMatches",
-      result.verifiedMatches
-    );
-
-    setText(
-      "featureCoverage",
-      `${result.featureCoverage}%`
-    );
-
-    setText(
-      "correspondenceStrength",
-      `${result.correspondenceStrength}%`
-    );
-
-    setText(
-      "inlierRatio",
-      `${result.inlierRatio}%`
-    );
-
-    setText(
-      "geometricConsistency",
-      `${result.geometricConsistency}%`
-    );
-
-    setText(
-      "homographyStatus",
-      result.homographyStatus
-    );
-
-    setText(
-      "verificationStatus",
-      result.verificationStatus
-    );
-
-    const map =
-      $("correspondenceMap");
-
-    if (
-      map &&
-      result.visualization
-    ) {
-      map.src =
-        result.visualization;
-
-      map.style.display =
-        "block";
-    }
-
-    const placeholder =
-      $("visualPlaceholder");
-
-    if (placeholder) {
-      placeholder.style.display =
-        "none";
-    }
-
-    setText(
-      "interpretation",
-      buildInterpretation(
-        result
-      )
-    );
-
-    setDisabled(
-      "downloadReportBtn",
-      false
-    );
-  }
-
-  /* ============================================================
-     MAIN ANALYSIS ENGINE
-     ============================================================ */
-
-  async function analyzeImages() {
-    if (
-      !imageAFile ||
-      !imageBFile
-    ) {
-      setText(
-        "status",
-        "SELECT BOTH IMAGES"
-      );
-
-      return;
-    }
-
-    setDisabled(
-      "compareBtn",
-      true
-    );
-
-    const start =
-      performance.now();
-
-    try {
-      resetPipeline();
-
-      /* --------------------------------------------------------
-         ACQUIRE
-         -------------------------------------------------------- */
-
-      pipelineActive(
-        "stageAcquire"
-      );
-
-      setText(
-        "status",
-        "ACQUIRING"
-      );
-
-      await delay(30);
-
-      const [
-        sourceA,
-        sourceB
-      ] =
-        await Promise.all([
-          imageToGray(
-            imageAFile
-          ),
-
-          imageToGray(
-            imageBFile
-          )
-        ]);
-
-      pipelineComplete(
-        "stageAcquire"
-      );
-
-      /* --------------------------------------------------------
-         PREPROCESS
-         -------------------------------------------------------- */
-
-      pipelineActive(
-        "stagePreprocess"
-      );
-
-      setText(
-        "status",
-        "PREPROCESSING"
-      );
-
-      await delay(30);
-
-      const workA =
-        localNormalize(
-          sourceA
-        );
-
-      const workB =
-        localNormalize(
-          sourceB
-        );
-
-      pipelineComplete(
-        "stagePreprocess"
-      );
-
-      /* --------------------------------------------------------
-         FEATURE EXTRACTION
-         -------------------------------------------------------- */
-
-      pipelineActive(
-        "stageExtract"
-      );
-
-      setText(
-        "status",
-        "EXTRACTING LUNAR FEATURES"
-      );
-
-      await delay(40);
-
-      const featuresA =
-        extractFeatures(
-          workA
-        );
-
-      await delay(20);
-
-      const featuresB =
-        extractFeatures(
-          workB
-        );
-
-      pipelineComplete(
-        "stageExtract"
-      );
-
-      /* --------------------------------------------------------
-         MATCHING
-         -------------------------------------------------------- */
-
-      pipelineActive(
-        "stageMatch"
-      );
-
-      setText(
-        "status",
-        "MATCHING CORRESPONDENCES"
-      );
-
-      await delay(40);
-
-      const matches =
-        matchFeatures(
-          featuresA,
-          featuresB
-        );
-
-      pipelineComplete(
-        "stageMatch"
-      );
-
-      /* --------------------------------------------------------
-         GEOMETRIC VERIFICATION
-         -------------------------------------------------------- */
-
-      pipelineActive(
-        "stageVerify"
-      );
-
-      setText(
-        "status",
-        "VERIFYING GEOMETRY"
-      );
-
-      await delay(40);
-
-      const verification =
-        verifyGeometry(
-          matches,
-          featuresA,
-          featuresB
-        );
-
-      pipelineComplete(
-        "stageVerify"
-      );
-
-      /* --------------------------------------------------------
-         SCORE
-         -------------------------------------------------------- */
-
-      pipelineActive(
-        "stageScore"
-      );
-
-      setText(
-        "status",
-        "CALCULATING EVIDENCE"
-      );
-
-      await delay(40);
-
-      const metricsA =
-        imageQuality(
-          sourceA
-        );
-
-      const metricsB =
-        imageQuality(
-          sourceB
-        );
-
-      const scored =
-        calculateScore(
-          metricsA,
-          metricsB,
-          featuresA,
-          featuresB,
-          matches,
-          verification,
-          workA.width,
-          workA.height
-        );
-
-      pipelineComplete(
-        "stageScore"
-      );
-
-      /* --------------------------------------------------------
-         REPORT
-         -------------------------------------------------------- */
-
-      pipelineActive(
-        "stageReport"
-      );
-
-      setText(
-        "status",
-        "BUILDING CORRESPONDENCE MAP"
-      );
-
-      await delay(30);
-
-      const visualization =
-        createCorrespondenceMap(
-          featuresA,
-          featuresB,
-          verification.inliers,
-          sourceA,
-          sourceB,
-          workA,
-          workB
-        );
-
-      const processingMs =
-        performance.now() -
-        start;
-
-      const result = {
-        ...scored,
-
-        processingMs,
-
-        metricsA,
-        metricsB,
-
-        featuresACount:
-          featuresA.length,
-
-        featuresBCount:
-          featuresB.length,
-
-        rawFeatureComparisons:
-          Math.min(
-            featuresA.length,
-            MAX_MATCH_FEATURES
-          ) *
-          Math.min(
-            featuresB.length,
-            MAX_MATCH_FEATURES
-          ),
-
-        homographyStatus:
-          verification.model
-            ? "AFFINE MODEL VERIFIED"
-            : "NOT ESTABLISHED",
-
-        verificationStatus:
-          verification.inliers.length >= 7
-            ? "RANSAC CONSISTENT"
-            : "INSUFFICIENT INLIERS",
-
-        visualization,
-
-        generatedAt:
-          new Date().toLocaleString()
-      };
-
-      lastAnalysis =
-        result;
-
-      displayResults(
-        result
-      );
-
-      pipelineComplete(
-        "stageReport"
-      );
-
-      setText(
-        "status",
-        result.classification
-      );
-
-      console.log(
-        "LUNARMATCH V7 ANALYSIS:",
-        {
-          featuresA:
-            featuresA.length,
-
-          featuresB:
-            featuresB.length,
-
-          candidates:
-            matches.length,
-
-          verified:
-            verification.inliers.length,
-
-          coverage:
-            result.featureCoverage,
-
-          inlierRatio:
-            result.inlierRatio,
-
-          consistency:
-            result.geometricConsistency,
-
-          score:
-            result.score
-        }
-      );
-
-    } catch (error) {
-      console.error(
-        "LUNARMATCH ENGINE ERROR:",
-        error
-      );
-
-      setText(
-        "status",
-        "ANALYSIS ERROR"
-      );
-
-      setText(
-        "interpretation",
-        error.message ||
-        "The analysis could not be completed."
-      );
-
-      PIPELINE.forEach(
-        id => {
-          const element =
-            $(id);
-
-          if (
-            element &&
-            element.classList.contains(
-              "active"
-            )
-          ) {
-            pipelineError(id);
-          }
-        }
-      );
-
-    } finally {
-      setDisabled(
-        "compareBtn",
-        false
-      );
-    }
-  }
-
-  /* ============================================================
-     PDF ENGINE
-     ============================================================ */
-
-  function loadPDFEngine() {
-    if (
-      window.jspdf &&
-      window.jspdf.jsPDF
-    ) {
-      return Promise.resolve(
-        window.jspdf.jsPDF
-      );
-    }
-
-    return new Promise(
-      (resolve, reject) => {
-        const existing =
-          document.querySelector(
-            'script[data-lunarmatch-jspdf="1"]'
-          );
-
-        if (existing) {
-          if (
-            window.jspdf &&
-            window.jspdf.jsPDF
-          ) {
-            resolve(
-              window.jspdf.jsPDF
-            );
-
-            return;
-          }
-
-          existing.addEventListener(
-            "load",
-            () => {
-              if (
-                window.jspdf &&
-                window.jspdf.jsPDF
-              ) {
-                resolve(
-                  window.jspdf.jsPDF
-                );
-              } else {
-                reject(
-                  new Error(
-                    "PDF engine loaded but jsPDF is unavailable."
-                  )
-                );
-              }
-            },
-            {
-              once: true
-            }
-          );
-
-          existing.addEventListener(
-            "error",
-            () =>
-              reject(
-                new Error(
-                  "PDF engine could not be loaded."
-                )
-              ),
-            {
-              once: true
-            }
-          );
-
-          return;
-        }
-
-        const script =
-          document.createElement(
-            "script"
-          );
-
-        script.src =
-          "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
-
-        script.async = true;
-
-        script.dataset.lunarmatchJspdf =
-          "1";
-
-        script.onload =
-          () => {
-            if (
-              window.jspdf &&
-              window.jspdf.jsPDF
+            for (
+                let x = radius + 1;
+                x < width - radius - 1;
+                x++
             ) {
-              resolve(
-                window.jspdf.jsPDF
-              );
-            } else {
-              reject(
-                new Error(
-                  "PDF engine loaded but jsPDF is unavailable."
-                )
-              );
+                const center =
+                    image.data[y * width + x];
+
+                let brighter = 0;
+                let darker = 0;
+
+                for (const [dx, dy] of circle) {
+                    const value =
+                        image.data[
+                            (y + dy) * width +
+                            (x + dx)
+                        ];
+
+                    if (value > center + threshold) {
+                        brighter++;
+                    }
+
+                    if (value < center - threshold) {
+                        darker++;
+                    }
+                }
+
+                /*
+                 * FAST-like contiguous arc approximation.
+                 */
+                if (
+                    brighter < 5 &&
+                    darker < 5
+                ) {
+                    continue;
+                }
+
+                let gx = 0;
+                let gy = 0;
+
+                for (let dy = -1; dy <= 1; dy++) {
+                    for (let dx = -1; dx <= 1; dx++) {
+                        if (dx === 0 && dy === 0) continue;
+
+                        const weight =
+                            dx === 0 || dy === 0
+                                ? 1
+                                : 0.707;
+
+                        const current =
+                            image.data[
+                                (y + dy) * width +
+                                (x + dx)
+                            ];
+
+                        gx +=
+                            (current - center) *
+                            dx *
+                            weight;
+
+                        gy +=
+                            (current - center) *
+                            dy *
+                            weight;
+                    }
+                }
+
+                const gradientStrength =
+                    Math.sqrt(gx * gx + gy * gy);
+
+                /*
+                 * Harris-style corner response.
+                 */
+                let sxx = 0;
+                let syy = 0;
+                let sxy = 0;
+
+                for (let dy = -2; dy <= 2; dy++) {
+                    for (let dx = -2; dx <= 2; dx++) {
+                        const g =
+                            gradientAt(
+                                image,
+                                x + dx,
+                                y + dy
+                            );
+
+                        sxx += g.gx * g.gx;
+                        syy += g.gy * g.gy;
+                        sxy += g.gx * g.gy;
+                    }
+                }
+
+                const determinant =
+                    sxx * syy - sxy * sxy;
+
+                const trace =
+                    sxx + syy + 1e-6;
+
+                const harris =
+                    determinant -
+                    0.04 * trace * trace;
+
+                const response =
+                    Math.max(
+                        0,
+                        harris
+                    ) +
+                    gradientStrength * 4;
+
+                if (response <= 5) continue;
+
+                candidates.push({
+                    x,
+                    y,
+                    response
+                });
             }
-          };
+        }
 
-        script.onerror =
-          () => {
-            reject(
-              new Error(
-                "PDF engine could not be loaded."
-              )
+        candidates.sort(
+            (a, b) => b.response - a.response
+        );
+
+        /*
+         * Spatial quota:
+         * Don't allow one crater/ridge to consume
+         * the entire feature budget.
+         */
+        const cellWidth =
+            width / CONFIG.GRID_COLS;
+
+        const cellHeight =
+            height / CONFIG.GRID_ROWS;
+
+        const perCell =
+            Math.ceil(
+                CONFIG.MAX_KEYPOINTS /
+                (CONFIG.GRID_ROWS * CONFIG.GRID_COLS)
             );
-          };
 
-        document.head.appendChild(
-          script
-        );
-      }
-    );
-  }
+        const cellCounts =
+            new Map();
 
-  /* ============================================================
-     PDF REPORT
-     ============================================================ */
+        const selected = [];
 
-  async function downloadReport() {
-    if (!lastAnalysis) {
-      setText(
-        "status",
-        "RUN ANALYSIS FIRST"
-      );
+        const minDistance =
+            Math.max(
+                8,
+                Math.min(width, height) * 0.018
+            );
 
-      return;
-    }
+        const minDistanceSq =
+            minDistance * minDistance;
 
-    setDisabled(
-      "downloadReportBtn",
-      true
-    );
+        for (const candidate of candidates) {
+            const col =
+                Math.min(
+                    CONFIG.GRID_COLS - 1,
+                    Math.floor(candidate.x / cellWidth)
+                );
 
-    try {
-      const jsPDF =
-        await loadPDFEngine();
+            const row =
+                Math.min(
+                    CONFIG.GRID_ROWS - 1,
+                    Math.floor(candidate.y / cellHeight)
+                );
 
-      const documentPDF =
-        new jsPDF({
-          unit: "mm",
-          format: "a4"
-        });
+            const cell =
+                row * CONFIG.GRID_COLS + col;
 
-      const margin =
-        16;
+            const count =
+                cellCounts.get(cell) || 0;
 
-      let y =
-        18;
+            if (count >= perCell) {
+                continue;
+            }
 
-      documentPDF.setFont(
-        "helvetica",
-        "bold"
-      );
+            let tooClose = false;
 
-      documentPDF.setFontSize(
-        20
-      );
+            /*
+             * Compare only against nearby selected points
+             * by using a small spatial neighborhood.
+             */
+            for (let i = selected.length - 1; i >= 0; i--) {
+                const point = selected[i];
 
-      documentPDF.text(
-        "LUNARMATCH",
-        margin,
-        y
-      );
+                if (
+                    Math.abs(point.x - candidate.x) >
+                    minDistance * 1.5
+                ) {
+                    continue;
+                }
 
-      y += 7;
+                if (
+                    Math.abs(point.y - candidate.y) >
+                    minDistance * 1.5
+                ) {
+                    continue;
+                }
 
-      documentPDF.setFont(
-        "helvetica",
-        "normal"
-      );
+                if (
+                    distanceSquared(
+                        point,
+                        candidate
+                    ) < minDistanceSq
+                ) {
+                    tooClose = true;
+                    break;
+                }
+            }
 
-      documentPDF.setFontSize(
-        9
-      );
+            if (tooClose) continue;
 
-      documentPDF.text(
-        "Lunar Image Correspondence Analysis Report",
-        margin,
-        y
-      );
+            selected.push(candidate);
 
-      y += 10;
+            cellCounts.set(
+                cell,
+                count + 1
+            );
 
-      documentPDF.setFontSize(
-        10
-      );
-
-      const statistics = [
-        `Generated: ${lastAnalysis.generatedAt}`,
-
-        `Result: ${lastAnalysis.classification}`,
-
-        `Correspondence Score: ${lastAnalysis.score}%`,
-
-        `Confidence: ${
-          lastAnalysis.score >= 80
-            ? "HIGH"
-            : lastAnalysis.score >= 65
-              ? "MODERATE"
-              : "LIMITED"
-        }`,
-
-        `Verified Features: ${lastAnalysis.verifiedMatches}`,
-
-        `Candidate Matches: ${lastAnalysis.candidateMatches}`,
-
-        `Inlier Ratio: ${lastAnalysis.inlierRatio}%`,
-
-        `Spatial Coverage: ${lastAnalysis.featureCoverage}%`,
-
-        `Geometric Consistency: ${lastAnalysis.geometricConsistency}%`,
-
-        `Image A Quality: ${lastAnalysis.metricsA.qualityScore}/100`,
-
-        `Image B Quality: ${lastAnalysis.metricsB.qualityScore}/100`,
-
-        `Processing Time: ${formatTime(lastAnalysis.processingMs)}`
-      ];
-
-      for (
-        const line of
-        statistics
-      ) {
-        documentPDF.text(
-          line,
-          margin,
-          y
-        );
-
-        y += 6;
-      }
-
-      y += 4;
-
-      documentPDF.setFont(
-        "helvetica",
-        "bold"
-      );
-
-      documentPDF.text(
-        "Interpretation",
-        margin,
-        y
-      );
-
-      y += 6;
-
-      documentPDF.setFont(
-        "helvetica",
-        "normal"
-      );
-
-      const interpretation =
-        buildInterpretation(
-          lastAnalysis
-        );
-
-      const wrapped =
-        documentPDF.splitTextToSize(
-          interpretation,
-          178
-        );
-
-      documentPDF.text(
-        wrapped,
-        margin,
-        y
-      );
-
-      y +=
-        wrapped.length *
-        5 +
-        7;
-
-      if (
-        lastAnalysis.visualization
-      ) {
-        documentPDF.setFont(
-          "helvetica",
-          "bold"
-        );
-
-        documentPDF.text(
-          "Correspondence Visualization",
-          margin,
-          y
-        );
-
-        y += 5;
-
-        const imageWidth =
-          178;
-
-        const imageHeight =
-          imageWidth *
-          0.55;
-
-        if (
-          y +
-            imageHeight >
-          282
-        ) {
-          documentPDF.addPage();
-
-          y = 18;
+            if (
+                selected.length >=
+                CONFIG.MAX_KEYPOINTS
+            ) {
+                break;
+            }
         }
 
-        documentPDF.addImage(
-          lastAnalysis.visualization,
-          "JPEG",
-          margin,
-          y,
-          imageWidth,
-          imageHeight
-        );
-      }
-
-      documentPDF.setFontSize(
-        7
-      );
-
-      documentPDF.setTextColor(
-        100
-      );
-
-      documentPDF.text(
-        "LUNARMATCH browser correspondence engine — computational estimate for research/prototype use.",
-        margin,
-        288
-      );
-
-      documentPDF.save(
-        "LUNARMATCH_Analysis_Report.pdf"
-      );
-
-      setText(
-        "status",
-        "REPORT READY"
-      );
-
-    } catch (error) {
-      console.error(
-        "PDF ERROR:",
-        error
-      );
-
-      setText(
-        "status",
-        "PDF ERROR"
-      );
-
-      setText(
-        "interpretation",
-        error.message ||
-        "The PDF report could not be generated."
-      );
-
-    } finally {
-      setDisabled(
-        "downloadReportBtn",
-        false
-      );
-    }
-  }
-
-  /* ============================================================
-     PREVIEW
-     ============================================================ */
-
-  function updatePreview(
-    previewId,
-    dataURL
-  ) {
-    const image =
-      $(previewId);
-
-    if (!image) {
-      console.warn(
-        `LUNARMATCH: Preview element ${previewId} not found.`
-      );
-
-      return;
-    }
-
-    image.src =
-      dataURL;
-
-    image.alt =
-      "Selected lunar image preview";
-
-    image.style.display =
-      "block";
-
-    image.removeAttribute(
-      "hidden"
-    );
-
-    console.log(
-      `LUNARMATCH: Preview updated for ${previewId}`
-    );
-  }
-
-  /* ============================================================
-     IMAGE HANDLING
-     ============================================================ */
-
-  async function handleImage(
-    file,
-    slot,
-    previewId
-  ) {
-    try {
-      validateFile(
-        file
-      );
-
-      setText(
-        "status",
-        `LOADING IMAGE ${slot}`
-      );
-
-      const dataURL =
-        await readDataURL(
-          file
-        );
-
-      if (
-        slot === "A"
-      ) {
-        imageAFile =
-          file;
-
-        imageAData =
-          dataURL;
-      } else {
-        imageBFile =
-          file;
-
-        imageBData =
-          dataURL;
-      }
-
-      updatePreview(
-        previewId,
-        dataURL
-      );
-
-      /*
-       * New image invalidates previous analysis.
-       */
-
-      lastAnalysis =
-        null;
-
-      setDisabled(
-        "downloadReportBtn",
-        true
-      );
-
-      if (
-        imageAFile &&
-        imageBFile
-      ) {
-        setText(
-          "status",
-          "READY TO ANALYZE"
-        );
-      } else {
-        setText(
-          "status",
-          `IMAGE ${slot} LOADED`
-        );
-      }
-
-      console.log(
-        `LUNARMATCH: Image ${slot} loaded successfully:`,
-        file.name
-      );
-
-    } catch (error) {
-      console.error(
-        `LUNARMATCH: Image ${slot} error:`,
-        error
-      );
-
-      setText(
-        "status",
-        "INVALID IMAGE"
-      );
-
-      setText(
-        "interpretation",
-        error.message
-      );
-    }
-  }
-
-  /* ============================================================
-     ROBUST FILE INPUT SETUP
-     ============================================================ */
-
-  function setupImageInput(
-    inputId,
-    previewId,
-    slot
-  ) {
-    const input =
-      $(inputId);
-
-    if (!input) {
-      console.error(
-        `LUNARMATCH: ${inputId} not found.`
-      );
-
-      return;
-    }
-
-    input.type =
-      "file";
-
-    input.accept =
-      "image/jpeg,image/png,image/webp,image/bmp,image/tiff,.jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff";
-
-    input.addEventListener(
-      "change",
-      async event => {
-        const files =
-          event.target.files;
-
+        /*
+         * If spatial quotas were too restrictive,
+         * fill remaining capacity with strong points.
+         */
         if (
-          !files ||
-          !files.length
+            selected.length <
+            Math.min(
+                CONFIG.MAX_KEYPOINTS,
+                candidates.length
+            )
         ) {
-          console.log(
-            `LUNARMATCH: No Image ${slot} selected.`
-          );
+            for (const candidate of candidates) {
+                if (
+                    selected.length >=
+                    CONFIG.MAX_KEYPOINTS
+                ) {
+                    break;
+                }
 
-          return;
+                if (
+                    selected.includes(candidate)
+                ) {
+                    continue;
+                }
+
+                selected.push(candidate);
+            }
         }
 
-        const file =
-          files[0];
+        return selected;
+    }
 
-        console.log(
-          `LUNARMATCH: Image ${slot} selected:`,
-          file.name,
-          file.type,
-          file.size
-        );
+    /* ============================================================
+       ROBUST GRADIENT DESCRIPTOR
+       ============================================================ */
 
-        await handleImage(
-          file,
-          slot,
-          previewId
-        );
-      }
-    );
+    function describeFeature(image, feature) {
+        const grid =
+            CONFIG.DESCRIPTOR_GRID;
 
-    console.log(
-      `LUNARMATCH: File input ${inputId} initialized.`
-    );
-  }
+        const bins =
+            CONFIG.ORIENTATION_BINS;
 
-  /* ============================================================
-     DRAG & DROP + CLICKABLE UPLOAD ZONE
-     ============================================================ */
+        const radius =
+            CONFIG.PATCH_RADIUS;
 
-  function setupDropZone(
-    zone,
-    input,
-    previewId,
-    slot
-  ) {
-    if (
-      !zone ||
-      !input
+        /*
+         * Determine dominant orientation.
+         */
+        let dominantX = 0;
+        let dominantY = 0;
+
+        for (
+            let y = -radius;
+            y <= radius;
+            y += 2
+        ) {
+            for (
+                let x = -radius;
+                x <= radius;
+                x += 2
+            ) {
+                const g =
+                    gradientAt(
+                        image,
+                        feature.x + x,
+                        feature.y + y
+                    );
+
+                const magnitude =
+                    Math.sqrt(
+                        g.gx * g.gx +
+                        g.gy * g.gy
+                    );
+
+                dominantX +=
+                    g.gx * magnitude;
+
+                dominantY +=
+                    g.gy * magnitude;
+            }
+        }
+
+        const dominantAngle =
+            Math.atan2(
+                dominantY,
+                dominantX
+            );
+
+        const descriptor =
+            new Float32Array(
+                grid * grid * bins
+            );
+
+        /*
+         * Rotate sampling coordinates according to
+         * dominant local gradient orientation.
+         */
+        const cosA =
+            Math.cos(-dominantAngle);
+
+        const sinA =
+            Math.sin(-dominantAngle);
+
+        const cellSize =
+            (radius * 2) / grid;
+
+        for (
+            let py = -radius;
+            py < radius;
+            py += 1
+        ) {
+            for (
+                let px = -radius;
+                px < radius;
+                px += 1
+            ) {
+                const rx =
+                    px * cosA -
+                    py * sinA;
+
+                const ry =
+                    px * sinA +
+                    py * cosA;
+
+                const sx =
+                    Math.round(
+                        feature.x + rx
+                    );
+
+                const sy =
+                    Math.round(
+                        feature.y + ry
+                    );
+
+                if (
+                    sx < 1 ||
+                    sy < 1 ||
+                    sx >= image.width - 1 ||
+                    sy >= image.height - 1
+                ) {
+                    continue;
+                }
+
+                const g =
+                    gradientAt(
+                        image,
+                        sx,
+                        sy
+                    );
+
+                const magnitude =
+                    Math.sqrt(
+                        g.gx * g.gx +
+                        g.gy * g.gy
+                    );
+
+                if (magnitude < 0.01) {
+                    continue;
+                }
+
+                let angle =
+                    Math.atan2(
+                        g.gy,
+                        g.gx
+                    ) -
+                    dominantAngle;
+
+                while (angle < 0) {
+                    angle += Math.PI * 2;
+                }
+
+                while (angle >= Math.PI * 2) {
+                    angle -= Math.PI * 2;
+                }
+
+                const binFloat =
+                    (angle /
+                        (Math.PI * 2)) *
+                    bins;
+
+                const bin0 =
+                    Math.floor(binFloat) % bins;
+
+                const fraction =
+                    binFloat - Math.floor(binFloat);
+
+                const bin1 =
+                    (bin0 + 1) % bins;
+
+                const cellX =
+                    clamp(
+                        Math.floor(
+                            (px + radius) /
+                            cellSize
+                        ),
+                        0,
+                        grid - 1
+                    );
+
+                const cellY =
+                    clamp(
+                        Math.floor(
+                            (py + radius) /
+                            cellSize
+                        ),
+                        0,
+                        grid - 1
+                    );
+
+                const base =
+                    (
+                        cellY * grid +
+                        cellX
+                    ) * bins;
+
+                /*
+                 * Distance from feature center gives
+                 * a gentle spatial weighting.
+                 */
+                const radial =
+                    Math.sqrt(
+                        px * px +
+                        py * py
+                    ) / radius;
+
+                const weight =
+                    Math.exp(
+                        -0.5 *
+                        radial *
+                        radial
+                    );
+
+                descriptor[base + bin0] +=
+                    magnitude *
+                    weight *
+                    (1 - fraction);
+
+                descriptor[base + bin1] +=
+                    magnitude *
+                    weight *
+                    fraction;
+            }
+        }
+
+        /*
+         * Root-style normalization.
+         */
+        let norm = 0;
+
+        for (let i = 0; i < descriptor.length; i++) {
+            norm +=
+                descriptor[i] *
+                descriptor[i];
+        }
+
+        norm =
+            Math.sqrt(norm) + 1e-8;
+
+        for (let i = 0; i < descriptor.length; i++) {
+            descriptor[i] /= norm;
+        }
+
+        /*
+         * Hellinger/root normalization.
+         */
+        for (let i = 0; i < descriptor.length; i++) {
+            descriptor[i] =
+                Math.sqrt(
+                    Math.abs(descriptor[i])
+                );
+        }
+
+        norm = 0;
+
+        for (let i = 0; i < descriptor.length; i++) {
+            norm +=
+                descriptor[i] *
+                descriptor[i];
+        }
+
+        norm =
+            Math.sqrt(norm) + 1e-8;
+
+        for (let i = 0; i < descriptor.length; i++) {
+            descriptor[i] /= norm;
+        }
+
+        return descriptor;
+    }
+
+    async function extractFeatures(image) {
+        const points =
+            detectFeatures(image);
+
+        const features = [];
+
+        for (let i = 0; i < points.length; i++) {
+            const point = points[i];
+
+            const descriptor =
+                describeFeature(
+                    image,
+                    point
+                );
+
+            features.push({
+                x: point.x,
+                y: point.y,
+                response: point.response,
+                descriptor
+            });
+
+            if (i % 80 === 0) {
+                await delay(0);
+            }
+        }
+
+        return features;
+    }
+
+    /* ============================================================
+       DESCRIPTOR DISTANCE
+       ============================================================ */
+
+    function descriptorDistance(a, b) {
+        let sum = 0;
+
+        for (let i = 0; i < a.length; i++) {
+            const d = a[i] - b[i];
+            sum += d * d;
+        }
+
+        return Math.sqrt(sum);
+    }
+
+    /* ============================================================
+       MATCHING
+       ============================================================ */
+
+    function nearestTwo(query, features) {
+        let bestIndex = -1;
+        let bestDistance = Infinity;
+
+        let secondDistance = Infinity;
+
+        for (let i = 0; i < features.length; i++) {
+            const distance =
+                descriptorDistance(
+                    query.descriptor,
+                    features[i].descriptor
+                );
+
+            if (distance < bestDistance) {
+                secondDistance = bestDistance;
+                bestDistance = distance;
+                bestIndex = i;
+            } else if (
+                distance < secondDistance
+            ) {
+                secondDistance = distance;
+            }
+        }
+
+        return {
+            bestIndex,
+            bestDistance,
+            secondDistance
+        };
+    }
+
+    function matchFeatures(
+        featuresA,
+        featuresB,
+        options = {}
     ) {
-      console.warn(
-        `LUNARMATCH: Drop zone or input missing for Image ${slot}.`
-      );
+        const ratio =
+            options.ratio ||
+            CONFIG.LOWE_RATIO;
 
-      return;
+        const maxDistance =
+            options.maxDistance ||
+            CONFIG.MAX_DESCRIPTOR_DISTANCE;
+
+        const limitA =
+            featuresA
+                .slice()
+                .sort(
+                    (a, b) =>
+                        b.response - a.response
+                )
+                .slice(
+                    0,
+                    CONFIG.MAX_MATCH_FEATURES
+                );
+
+        const limitB =
+            featuresB
+                .slice()
+                .sort(
+                    (a, b) =>
+                        b.response - a.response
+                )
+                .slice(
+                    0,
+                    CONFIG.MAX_MATCH_FEATURES
+                );
+
+        const forward = [];
+
+        for (let i = 0; i < limitA.length; i++) {
+            const result =
+                nearestTwo(
+                    limitA[i],
+                    limitB
+                );
+
+            if (result.bestIndex < 0) {
+                continue;
+            }
+
+            const ratioValue =
+                result.secondDistance === Infinity
+                    ? 0
+                    : result.bestDistance /
+                      result.secondDistance;
+
+            if (
+                ratioValue <= ratio &&
+                result.bestDistance <= maxDistance
+            ) {
+                forward.push({
+                    a: limitA[i],
+                    b: limitB[result.bestIndex],
+                    distance: result.bestDistance,
+                    ratio: ratioValue
+                });
+            }
+        }
+
+        /*
+         * Reverse pass for mutual consistency.
+         */
+        const reverseMap =
+            new Map();
+
+        for (let i = 0; i < limitB.length; i++) {
+            const result =
+                nearestTwo(
+                    limitB[i],
+                    limitA
+                );
+
+            if (result.bestIndex < 0) {
+                continue;
+            }
+
+            reverseMap.set(
+                limitB[i],
+                {
+                    feature: limitA[result.bestIndex],
+                    distance: result.bestDistance
+                }
+            );
+        }
+
+        const mutual = [];
+
+        for (const match of forward) {
+            const reverse =
+                reverseMap.get(match.b);
+
+            if (!reverse) continue;
+
+            if (
+                reverse.feature !== match.a
+            ) {
+                continue;
+            }
+
+            mutual.push(match);
+        }
+
+        /*
+         * Sort strongest descriptor matches first.
+         */
+        mutual.sort(
+            (a, b) =>
+                a.distance - b.distance
+        );
+
+        return mutual;
     }
 
-    zone.addEventListener(
-      "click",
-      event => {
-        if (
-          event.target ===
-          input
-        ) {
-          return;
+    async function robustMatch(
+        featuresA,
+        featuresB
+    ) {
+        let matches =
+            matchFeatures(
+                featuresA,
+                featuresB,
+                {
+                    ratio: CONFIG.LOWE_RATIO,
+                    maxDistance:
+                        CONFIG.MAX_DESCRIPTOR_DISTANCE
+                }
+            );
+
+        let mode = "STRICT";
+
+        /*
+         * If strict matching is too sparse,
+         * perform a controlled relaxed pass.
+         */
+        if (matches.length < 8) {
+            const relaxed =
+                matchFeatures(
+                    featuresA,
+                    featuresB,
+                    {
+                        ratio:
+                            CONFIG.RELAXED_RATIO,
+                        maxDistance:
+                            CONFIG.RELAXED_DESCRIPTOR_DISTANCE
+                    }
+                );
+
+            if (
+                relaxed.length >
+                matches.length
+            ) {
+                matches = relaxed;
+                mode = "RELAXED";
+            }
         }
 
-        console.log(
-          `LUNARMATCH: Opening Image ${slot} file picker.`
-        );
+        /*
+         * Deduplicate spatially similar matches.
+         */
+        const filtered = [];
 
-        input.click();
-      }
-    );
+        for (const match of matches) {
+            let duplicate = false;
 
-    [
-      "dragenter",
-      "dragover"
-    ].forEach(
-      eventName => {
-        zone.addEventListener(
-          eventName,
-          event => {
-            event.preventDefault();
+            for (const existing of filtered) {
+                const da =
+                    distanceSquared(
+                        match.a,
+                        existing.a
+                    );
 
-            event.stopPropagation();
+                const db =
+                    distanceSquared(
+                        match.b,
+                        existing.b
+                    );
 
-            zone.classList.add(
-              "dragging"
-            );
-          }
-        );
-      }
-    );
+                if (
+                    da < 9 &&
+                    db < 9
+                ) {
+                    duplicate = true;
+                    break;
+                }
+            }
 
-    [
-      "dragleave",
-      "drop"
-    ].forEach(
-      eventName => {
-        zone.addEventListener(
-          eventName,
-          event => {
-            event.preventDefault();
-
-            event.stopPropagation();
-
-            zone.classList.remove(
-              "dragging"
-            );
-          }
-        );
-      }
-    );
-
-    zone.addEventListener(
-      "drop",
-      async event => {
-        const files =
-          event.dataTransfer?.files;
-
-        if (
-          !files ||
-          !files.length
-        ) {
-          return;
+            if (!duplicate) {
+                filtered.push(match);
+            }
         }
 
+        await delay(0);
+
+        return {
+            matches: filtered,
+            mode
+        };
+    }
+
+    /* ============================================================
+       AFFINE MODEL
+       ============================================================ */
+
+    function solveAffine(
+        p1,
+        p2,
+        p3,
+        q1,
+        q2,
+        q3
+    ) {
+        const matrix = [
+            [
+                p1.x,
+                p1.y,
+                1,
+                0,
+                0,
+                0
+            ],
+            [
+                0,
+                0,
+                0,
+                p1.x,
+                p1.y,
+                1
+            ],
+            [
+                p2.x,
+                p2.y,
+                1,
+                0,
+                0,
+                0
+            ],
+            [
+                0,
+                0,
+                0,
+                p2.x,
+                p2.y,
+                1
+            ],
+            [
+                p3.x,
+                p3.y,
+                1,
+                0,
+                0,
+                0
+            ],
+            [
+                0,
+                0,
+                0,
+                p3.x,
+                p3.y,
+                1
+            ]
+        ];
+
+        const values = [
+            q1.x,
+            q1.y,
+            q2.x,
+            q2.y,
+            q3.x,
+            q3.y
+        ];
+
+        /*
+         * Gaussian elimination.
+         */
+        for (let col = 0; col < 6; col++) {
+            let pivot = col;
+
+            for (
+                let row = col + 1;
+                row < 6;
+                row++
+            ) {
+                if (
+                    Math.abs(
+                        matrix[row][col]
+                    ) >
+                    Math.abs(
+                        matrix[pivot][col]
+                    )
+                ) {
+                    pivot = row;
+                }
+            }
+
+            if (
+                Math.abs(
+                    matrix[pivot][col]
+                ) < 1e-9
+            ) {
+                return null;
+            }
+
+            [
+                matrix[col],
+                matrix[pivot]
+            ] = [
+                matrix[pivot],
+                matrix[col]
+            ];
+
+            [
+                values[col],
+                values[pivot]
+            ] = [
+                values[pivot],
+                values[col]
+            ];
+
+            const divisor =
+                matrix[col][col];
+
+            for (let j = col; j < 6; j++) {
+                matrix[col][j] /= divisor;
+            }
+
+            values[col] /= divisor;
+
+            for (let row = 0; row < 6; row++) {
+                if (row === col) continue;
+
+                const factor =
+                    matrix[row][col];
+
+                for (
+                    let j = col;
+                    j < 6;
+                    j++
+                ) {
+                    matrix[row][j] -=
+                        factor *
+                        matrix[col][j];
+                }
+
+                values[row] -=
+                    factor *
+                    values[col];
+            }
+        }
+
+        return {
+            a: values[0],
+            b: values[1],
+            c: values[2],
+            d: values[3],
+            e: values[4],
+            f: values[5]
+        };
+    }
+
+    function transform(model, point) {
+        return {
+            x:
+                model.a * point.x +
+                model.b * point.y +
+                model.c,
+
+            y:
+                model.d * point.x +
+                model.e * point.y +
+                model.f
+        };
+    }
+
+    function triangleArea(a, b, c) {
+        return Math.abs(
+            (
+                a.x * (b.y - c.y) +
+                b.x * (c.y - a.y) +
+                c.x * (a.y - b.y)
+            ) * 0.5
+        );
+    }
+
+    /* ============================================================
+       GEOMETRIC VERIFICATION
+       ============================================================ */
+
+    function verifyGeometry(
+        matches,
+        imageA,
+        imageB
+    ) {
+        if (
+            matches.length <
+            CONFIG.MIN_CANDIDATES_FOR_GEOMETRY
+        ) {
+            return {
+                model: null,
+                inliers: [],
+                ratio: 0,
+                meanError: Infinity,
+                medianError: Infinity,
+                consistency: 0
+            };
+        }
+
+        /*
+         * Threshold adapts to working image dimensions.
+         */
+        const scale =
+            Math.max(
+                imageA.width,
+                imageA.height,
+                imageB.width,
+                imageB.height
+            ) / 700;
+
+        const threshold =
+            clamp(
+                CONFIG.RANSAC_ERROR_PIXELS * scale,
+                7,
+                14
+            );
+
+        let bestModel = null;
+        let bestInliers = [];
+        let bestError = Infinity;
+
+        for (
+            let iteration = 0;
+            iteration < CONFIG.RANSAC_ITERATIONS;
+            iteration++
+        ) {
+            const n = matches.length;
+
+            const i1 =
+                Math.floor(Math.random() * n);
+
+            let i2 =
+                Math.floor(Math.random() * n);
+
+            let i3 =
+                Math.floor(Math.random() * n);
+
+            if (
+                i1 === i2 ||
+                i1 === i3 ||
+                i2 === i3
+            ) {
+                continue;
+            }
+
+            const m1 = matches[i1];
+            const m2 = matches[i2];
+            const m3 = matches[i3];
+
+            /*
+             * Reject degenerate triangles.
+             */
+            const areaA =
+                triangleArea(
+                    m1.a,
+                    m2.a,
+                    m3.a
+                );
+
+            const areaB =
+                triangleArea(
+                    m1.b,
+                    m2.b,
+                    m3.b
+                );
+
+            if (
+                areaA < 3 ||
+                areaB < 3
+            ) {
+                continue;
+            }
+
+            const model =
+                solveAffine(
+                    m1.a,
+                    m2.a,
+                    m3.a,
+                    m1.b,
+                    m2.b,
+                    m3.b
+                );
+
+            if (!model) continue;
+
+            const inliers = [];
+            let totalError = 0;
+
+            for (const match of matches) {
+                const predicted =
+                    transform(
+                        model,
+                        match.a
+                    );
+
+                const dx =
+                    predicted.x -
+                    match.b.x;
+
+                const dy =
+                    predicted.y -
+                    match.b.y;
+
+                const error =
+                    Math.sqrt(
+                        dx * dx +
+                        dy * dy
+                    );
+
+                if (error <= threshold) {
+                    inliers.push({
+                        ...match,
+                        error
+                    });
+
+                    totalError += error;
+                }
+            }
+
+            if (!inliers.length) continue;
+
+            const meanError =
+                totalError /
+                inliers.length;
+
+            const better =
+                inliers.length >
+                    bestInliers.length ||
+                (
+                    inliers.length ===
+                        bestInliers.length &&
+                    meanError < bestError
+                );
+
+            if (better) {
+                bestModel = model;
+                bestInliers = inliers;
+                bestError = meanError;
+            }
+
+            const ratio =
+                inliers.length /
+                matches.length;
+
+            /*
+             * Early termination once we have a very
+             * convincing model.
+             */
+            if (
+                inliers.length >= 20 &&
+                ratio >=
+                    CONFIG.EARLY_RANSAC_INLIER_RATIO
+            ) {
+                break;
+            }
+        }
+
+        if (
+            !bestModel ||
+            bestInliers.length < 3
+        ) {
+            return {
+                model: bestModel,
+                inliers: bestInliers,
+                ratio:
+                    matches.length
+                        ? bestInliers.length /
+                          matches.length
+                        : 0,
+                meanError: Infinity,
+                medianError: Infinity,
+                consistency: 0
+            };
+        }
+
+        /*
+         * Refit using all current inliers.
+         * This stabilizes the affine model.
+         */
+        if (bestInliers.length >= 3) {
+            const base =
+                bestInliers;
+
+            /*
+             * Use several random triplets and choose the
+             * least-error refined model.
+             */
+            let refinedModel =
+                bestModel;
+
+            if (base.length >= 6) {
+                let bestRefinedError =
+                    Infinity;
+
+                for (
+                    let k = 0;
+                    k < Math.min(20, base.length * 2);
+                    k++
+                ) {
+                    const i1 =
+                        Math.floor(
+                            Math.random() *
+                            base.length
+                        );
+
+                    let i2 =
+                        Math.floor(
+                            Math.random() *
+                            base.length
+                        );
+
+                    let i3 =
+                        Math.floor(
+                            Math.random() *
+                            base.length
+                        );
+
+                    if (
+                        i1 === i2 ||
+                        i1 === i3 ||
+                        i2 === i3
+                    ) {
+                        continue;
+                    }
+
+                    const candidate =
+                        solveAffine(
+                            base[i1].a,
+                            base[i2].a,
+                            base[i3].a,
+                            base[i1].b,
+                            base[i2].b,
+                            base[i3].b
+                        );
+
+                    if (!candidate) continue;
+
+                    let errorSum = 0;
+
+                    for (const m of base) {
+                        const p =
+                            transform(
+                                candidate,
+                                m.a
+                            );
+
+                        const dx =
+                            p.x - m.b.x;
+
+                        const dy =
+                            p.y - m.b.y;
+
+                        errorSum +=
+                            Math.sqrt(
+                                dx * dx +
+                                dy * dy
+                            );
+                    }
+
+                    const average =
+                        errorSum /
+                        base.length;
+
+                    if (
+                        average <
+                        bestRefinedError
+                    ) {
+                        bestRefinedError =
+                            average;
+
+                        refinedModel =
+                            candidate;
+                    }
+                }
+            }
+
+            bestModel =
+                refinedModel;
+        }
+
+        /*
+         * Recalculate inliers using refined model.
+         */
+        const refinedInliers = [];
+        const errors = [];
+
+        for (const match of matches) {
+            const predicted =
+                transform(
+                    bestModel,
+                    match.a
+                );
+
+            const dx =
+                predicted.x - match.b.x;
+
+            const dy =
+                predicted.y - match.b.y;
+
+            const error =
+                Math.sqrt(
+                    dx * dx +
+                    dy * dy
+                );
+
+            if (error <= threshold) {
+                refinedInliers.push({
+                    ...match,
+                    error
+                });
+
+                errors.push(error);
+            }
+        }
+
+        errors.sort((a, b) => a - b);
+
+        const meanError =
+            errors.length
+                ? errors.reduce(
+                    (a, b) => a + b,
+                    0
+                ) / errors.length
+                : Infinity;
+
+        const medianError =
+            errors.length
+                ? errors[
+                    Math.floor(
+                        errors.length / 2
+                    )
+                ]
+                : Infinity;
+
+        const ratio =
+            matches.length
+                ? refinedInliers.length /
+                  matches.length
+                : 0;
+
+        const consistency =
+            Number.isFinite(meanError)
+                ? clamp(
+                    100 -
+                    meanError * 10 -
+                    medianError * 4,
+                    0,
+                    100
+                )
+                : 0;
+
+        return {
+            model: bestModel,
+            inliers: refinedInliers,
+            ratio,
+            meanError,
+            medianError,
+            consistency
+        };
+    }
+
+    /* ============================================================
+       COVERAGE
+       ============================================================ */
+
+    function calculateCoverage(
+        inliers,
+        image
+    ) {
+        if (!inliers.length) return 0;
+
+        const occupied =
+            new Set();
+
+        const cols = 4;
+        const rows = 4;
+
+        for (const match of inliers) {
+            const col =
+                clamp(
+                    Math.floor(
+                        (match.a.x /
+                            image.width) *
+                        cols
+                    ),
+                    0,
+                    cols - 1
+                );
+
+            const row =
+                clamp(
+                    Math.floor(
+                        (match.a.y /
+                            image.height) *
+                        rows
+                    ),
+                    0,
+                    rows - 1
+                );
+
+            occupied.add(
+                row * cols + col
+            );
+        }
+
+        return (
+            occupied.size /
+            (rows * cols)
+        ) * 100;
+    }
+
+    /* ============================================================
+       MATCH QUALITY
+       ============================================================ */
+
+    function calculateMatchQuality(matches) {
+        if (!matches.length) return 0;
+
+        let sum = 0;
+
+        for (const match of matches) {
+            const distanceScore =
+                clamp(
+                    1 -
+                    match.distance /
+                    CONFIG.RELAXED_DESCRIPTOR_DISTANCE,
+                    0,
+                    1
+                );
+
+            const ratioScore =
+                clamp(
+                    1 -
+                    match.ratio,
+                    0,
+                    1
+                );
+
+            sum +=
+                distanceScore * 0.65 +
+                ratioScore * 0.35;
+        }
+
+        return (
+            sum /
+            matches.length
+        ) * 100;
+    }
+
+    /* ============================================================
+       SCORE
+       ============================================================ */
+
+    function calculateScore(
+        featuresA,
+        featuresB,
+        matches,
+        verification,
+        qualityA,
+        qualityB,
+        matchingMode
+    ) {
+        const verified =
+            verification.inliers.length;
+
+        const candidates =
+            matches.length;
+
+        const featureBase =
+            Math.max(
+                1,
+                Math.min(
+                    featuresA.length,
+                    featuresB.length
+                )
+            );
+
+        const density =
+            clamp(
+                (verified /
+                    featureBase) *
+                500,
+                0,
+                100
+            );
+
+        const geometric =
+            clamp(
+                verification.ratio * 150,
+                0,
+                100
+            );
+
+        const consistency =
+            verification.consistency;
+
+        const coverage =
+            calculateCoverage(
+                verification.inliers,
+                {
+                    width: 700,
+                    height: 700
+                }
+            );
+
+        const matchQuality =
+            calculateMatchQuality(
+                verification.inliers.length
+                    ? verification.inliers
+                    : matches
+            );
+
+        const imageQuality =
+            (
+                qualityA.qualityScore +
+                qualityB.qualityScore
+            ) / 2;
+
+        /*
+         * Candidate abundance is useful, but it should
+         * never overpower geometric evidence.
+         */
+        const candidateSupport =
+            clamp(
+                candidates / 25 * 100,
+                0,
+                100
+            );
+
+        let score =
+            density * 0.27 +
+            geometric * 0.25 +
+            consistency * 0.18 +
+            coverage * 0.10 +
+            matchQuality * 0.12 +
+            imageQuality * 0.05 +
+            candidateSupport * 0.03;
+
+        /*
+         * Relaxed matching gets a small evidence penalty.
+         * This prevents relaxed matches from being treated
+         * as equally trustworthy as strict matches.
+         */
+        if (matchingMode === "RELAXED") {
+            score *= 0.94;
+        }
+
+        /*
+         * Strong evidence floor:
+         * a result cannot become strong merely because
+         * the images are high quality.
+         */
+        if (verified < 6) {
+            score = Math.min(score, 44);
+        } else if (verified < 10) {
+            score = Math.min(score, 59);
+        }
+
+        const strong =
+            verified >= 20 &&
+            score >= 78 &&
+            verification.ratio >= 0.35 &&
+            verification.consistency >= 75;
+
+        const found =
+            verified >= 10 &&
+            score >= 60 &&
+            verification.ratio >= 0.25;
+
+        const possible =
+            verified >= 6 &&
+            score >= 45 &&
+            coverage >= 18;
+
+        let status =
+            "NO RELIABLE CORRESPONDENCE";
+
+        let confidence =
+            "LOW";
+
+        if (strong) {
+            status = "STRONG CORRESPONDENCE";
+            confidence = "HIGH";
+        } else if (found) {
+            status = "CORRESPONDENCE FOUND";
+            confidence = "MODERATE";
+        } else if (possible) {
+            status = "POSSIBLE CORRESPONDENCE";
+            confidence = "LOW";
+        }
+
+        return {
+            score: clamp(score, 0, 100),
+            status,
+            confidence,
+
+            density,
+            geometric,
+            consistency,
+            coverage,
+            matchQuality,
+            imageQuality,
+            candidateSupport,
+
+            strong,
+            found,
+            possible
+        };
+    }
+
+    /* ============================================================
+       INTERPRETATION
+       ============================================================ */
+
+    function buildInterpretation(
+        scored,
+        featuresA,
+        featuresB,
+        matches,
+        verification,
+        matchingMode
+    ) {
+        const verified =
+            verification.inliers.length;
+
+        const candidates =
+            matches.length;
+
+        if (scored.strong) {
+            return (
+                `Strong lunar correspondence established. ` +
+                `${verified} feature correspondences remain geometrically consistent ` +
+                `after affine RANSAC verification, with a ${(verification.ratio * 100).toFixed(1)}% ` +
+                `inlier ratio. The correspondence is supported by spatial coverage and descriptor agreement.`
+            );
+        }
+
+        if (scored.found) {
+            return (
+                `Reliable lunar correspondence detected. ` +
+                `${verified} verified features support a consistent affine relationship ` +
+                `between the two images. The evidence is sufficient for a moderate-confidence match.`
+            );
+        }
+
+        if (scored.possible) {
+            return (
+                `Possible lunar correspondence detected. ` +
+                `${verified} features survived geometric verification from ${candidates} candidate matches. ` +
+                `The geometric evidence is promising but remains below the threshold required for a reliable match.`
+            );
+        }
+
+        if (matchingMode === "RELAXED") {
+            return (
+                `The engine detected limited feature agreement using a controlled relaxed matching pass. ` +
+                `${featuresA.length} and ${featuresB.length} features were available, but only ` +
+                `${verified} correspondences survived geometric verification. ` +
+                `More verified features are required before the correspondence can be considered reliable.`
+            );
+        }
+
+        return (
+            `The images contain sufficient visual structure for analysis, but the current ` +
+            `correspondence evidence is too sparse to establish a reliable relationship. ` +
+            `${featuresA.length} and ${featuresB.length} local features were detected, ` +
+            `while ${candidates} candidate correspondences were generated and ` +
+            `${verified} survived geometric verification.`
+        );
+    }
+
+    /* ============================================================
+       CORRESPONDENCE VISUALIZATION
+       ============================================================ */
+
+    function createCorrespondenceMap(
+        sourceA,
+        sourceB,
+        workA,
+        workB,
+        inliers
+    ) {
+        const container =
+            $("correspondenceMap");
+
+        if (!container) return;
+
+        container.innerHTML = "";
+
+        const maxWidth = 1200;
+
+        const totalWidth =
+            Math.min(
+                maxWidth,
+                sourceA.width +
+                sourceB.width
+            );
+
+        const leftWidth =
+            totalWidth *
+            (
+                sourceA.width /
+                (sourceA.width +
+                    sourceB.width)
+            );
+
+        const rightWidth =
+            totalWidth -
+            leftWidth;
+
+        const maxHeight =
+            Math.max(
+                sourceA.height,
+                sourceB.height
+            );
+
+        const scale =
+            Math.min(
+                1,
+                maxWidth /
+                (
+                    sourceA.width +
+                    sourceB.width
+                )
+            );
+
+        const canvas =
+            document.createElement("canvas");
+
+        canvas.width =
+            Math.round(
+                (
+                    sourceA.width +
+                    sourceB.width
+                ) * scale
+            );
+
+        canvas.height =
+            Math.round(
+                maxHeight * scale
+            );
+
+        canvas.style.width = "100%";
+        canvas.style.height = "auto";
+
+        const ctx =
+            canvas.getContext("2d");
+
+        const canvasA =
+            document.createElement("canvas");
+
+        canvasA.width =
+            sourceA.width;
+
+        canvasA.height =
+            sourceA.height;
+
+        const ctxA =
+            canvasA.getContext("2d");
+
+        const canvasB =
+            document.createElement("canvas");
+
+        canvasB.width =
+            sourceB.width;
+
+        canvasB.height =
+            sourceB.height;
+
+        const ctxB =
+            canvasB.getContext("2d");
+
+        /*
+         * Convert grayscale arrays to display images.
+         */
+        function drawGray(
+            image,
+            ctxTarget
+        ) {
+            const imageData =
+                ctxTarget.createImageData(
+                    image.width,
+                    image.height
+                );
+
+            for (
+                let i = 0, p = 0;
+                i < image.data.length;
+                i++, p += 4
+            ) {
+                const value =
+                    clamp(
+                        Math.round(
+                            image.data[i]
+                        ),
+                        0,
+                        255
+                    );
+
+                imageData.data[p] =
+                    value;
+
+                imageData.data[p + 1] =
+                    value;
+
+                imageData.data[p + 2] =
+                    value;
+
+                imageData.data[p + 3] =
+                    255;
+            }
+
+            ctxTarget.putImageData(
+                imageData,
+                0,
+                0
+            );
+        }
+
+        drawGray(sourceA, ctxA);
+        drawGray(sourceB, ctxB);
+
+        ctx.drawImage(
+            canvasA,
+            0,
+            0,
+            sourceA.width * scale,
+            sourceA.height * scale
+        );
+
+        const offsetX =
+            sourceA.width * scale;
+
+        ctx.drawImage(
+            canvasB,
+            offsetX,
+            0,
+            sourceB.width * scale,
+            sourceB.height * scale
+        );
+
+        /*
+         * Feature coordinates come from work images,
+         * while the display uses source images.
+         * Correct the coordinate scale here.
+         */
+        const scaleAX =
+            sourceA.width /
+            workA.width;
+
+        const scaleAY =
+            sourceA.height /
+            workA.height;
+
+        const scaleBX =
+            sourceB.width /
+            workB.width;
+
+        const scaleBY =
+            sourceB.height /
+            workB.height;
+
+        ctx.lineWidth = 1.2;
+
+        const displayMatches =
+            inliers
+                .slice()
+                .sort(
+                    (a, b) =>
+                        a.error - b.error
+                )
+                .slice(
+                    0,
+                    CONFIG.MAX_VISUAL_MATCHES
+                );
+
+        for (const match of displayMatches) {
+            const ax =
+                match.a.x *
+                scaleAX *
+                scale;
+
+            const ay =
+                match.a.y *
+                scaleAY *
+                scale;
+
+            const bx =
+                offsetX +
+                match.b.x *
+                scaleBX *
+                scale;
+
+            const by =
+                match.b.y *
+                scaleBY *
+                scale;
+
+            ctx.beginPath();
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(bx, by);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(
+                ax,
+                ay,
+                2.4,
+                0,
+                Math.PI * 2
+            );
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.arc(
+                bx,
+                by,
+                2.4,
+                0,
+                Math.PI * 2
+            );
+            ctx.fill();
+        }
+
+        container.appendChild(canvas);
+        container.style.display = "";
+    }
+
+    /* ============================================================
+       DISPLAY RESULTS
+       ============================================================ */
+
+    function displayResults(result) {
+        const {
+            scored,
+            processingMs,
+            qualityA,
+            qualityB,
+            featuresA,
+            featuresB,
+            matches,
+            verification,
+            matchingMode
+        } = result;
+
+        setText(
+            "status",
+            scored.status
+        );
+
+        setText(
+            "score",
+            `${Math.round(scored.score)}%`
+        );
+
+        setText(
+            "features",
+            `${featuresA.length} / ${featuresB.length}`
+        );
+
+        setText(
+            "confidence",
+            scored.confidence
+        );
+
+        setText(
+            "quality",
+            `${Math.round(
+                (
+                    qualityA.qualityScore +
+                    qualityB.qualityScore
+                ) / 2
+            )}/100`
+        );
+
+        setText(
+            "time",
+            formatTime(processingMs)
+        );
+
+        /* ---------------- IMAGE A ---------------- */
+
+        setText(
+            "resolutionA",
+            `${result.imageA.width} × ${result.imageA.height}`
+        );
+
+        setText(
+            "keypointsA",
+            featuresA.length
+        );
+
+        setText(
+            "contrastA",
+            round(
+                qualityA.contrast,
+                2
+            )
+        );
+
+        setText(
+            "sharpnessA",
+            round(
+                qualityA.sharpness,
+                2
+            )
+        );
+
+        setText(
+            "qualityScoreA",
+            `${round(
+                qualityA.qualityScore,
+                1
+            )}/100`
+        );
+
+        /* ---------------- IMAGE B ---------------- */
+
+        setText(
+            "resolutionB",
+            `${result.imageB.width} × ${result.imageB.height}`
+        );
+
+        setText(
+            "keypointsB",
+            featuresB.length
+        );
+
+        setText(
+            "contrastB",
+            round(
+                qualityB.contrast,
+                2
+            )
+        );
+
+        setText(
+            "sharpnessB",
+            round(
+                qualityB.sharpness,
+                2
+            )
+        );
+
+        setText(
+            "qualityScoreB",
+            `${round(
+                qualityB.qualityScore,
+                1
+            )}/100`
+        );
+
+        /* ---------------- MATCHING ---------------- */
+
+        setText(
+            "rawMatches",
+            result.rawFeatureComparisons
+        );
+
+        setText(
+            "candidateMatches",
+            matches.length
+        );
+
+        setText(
+            "verifiedMatches",
+            verification.inliers.length
+        );
+
+        const coverage =
+            calculateCoverage(
+                verification.inliers,
+                result.workA
+            );
+
+        setText(
+            "featureCoverage",
+            `${round(
+                coverage,
+                0
+            )}%`
+        );
+
+        setText(
+            "correspondenceStrength",
+            `${round(
+                (
+                    verification.inliers.length /
+                    Math.max(
+                        1,
+                        Math.min(
+                            featuresA.length,
+                            featuresB.length
+                        )
+                    )
+                ) * 100,
+                1
+            )}%`
+        );
+
+        /* ---------------- GEOMETRY ---------------- */
+
+        setText(
+            "inlierRatio",
+            `${round(
+                verification.ratio * 100,
+                1
+            )}%`
+        );
+
+        setText(
+            "geometricConsistency",
+            `${round(
+                verification.consistency,
+                1
+            )}%`
+        );
+
+        setText(
+            "homographyStatus",
+            verification.model
+                ? "AFFINE MODEL VERIFIED"
+                : "NOT ESTABLISHED"
+        );
+
+        setText(
+            "verificationStatus",
+            verification.inliers.length >= 6
+                ? "RANSAC CONSISTENT"
+                : "INSUFFICIENT INLIERS"
+        );
+
+        setText(
+            "visualNote",
+            `LOCAL FEATURES + RANSAC • ${matchingMode} MATCHING`
+        );
+
+        setText(
+            "interpretation",
+            buildInterpretation(
+                scored,
+                featuresA,
+                featuresB,
+                matches,
+                verification,
+                matchingMode
+            )
+        );
+
+        createCorrespondenceMap(
+            result.imageA,
+            result.imageB,
+            result.workA,
+            result.workB,
+            verification.inliers
+        );
+
+        const placeholder =
+            $("visualPlaceholder");
+
+        if (placeholder) {
+            placeholder.style.display =
+                verification.inliers.length
+                    ? "none"
+                    : "";
+        }
+
+        setDisabled(
+            "downloadReportBtn",
+            false
+        );
+    }
+
+    /* ============================================================
+       MAIN ANALYSIS
+       ============================================================ */
+
+    async function analyzeImages() {
+        if (
+            !state.imageAFile ||
+            !state.imageBFile
+        ) {
+            setText(
+                "status",
+                "Please upload both Image A and Image B before analysis."
+            );
+            return;
+        }
+
+        const start =
+            performance.now();
+
+        resetPipeline();
+
+        try {
+            /* ---------------- ACQUIRE ---------------- */
+
+            setPipelineActive(
+                "stageAcquire"
+            );
+
+            setText(
+                "status",
+                "ACQUIRING IMAGE DATA..."
+            );
+
+            const [
+                imageA,
+                imageB
+            ] = await Promise.all([
+                imageToGray(
+                    state.imageAFile
+                ),
+                imageToGray(
+                    state.imageBFile
+                )
+            ]);
+
+            setPipelineComplete(
+                "stageAcquire"
+            );
+
+            await nextFrame();
+
+            /* ---------------- PREPROCESS ---------------- */
+
+            setPipelineActive(
+                "stagePreprocess"
+            );
+
+            setText(
+                "status",
+                "NORMALIZING LUNAR SURFACE DATA..."
+            );
+
+            const workA =
+                localNormalize(imageA);
+
+            const workB =
+                localNormalize(imageB);
+
+            const qualityA =
+                imageQuality(workA);
+
+            const qualityB =
+                imageQuality(workB);
+
+            setPipelineComplete(
+                "stagePreprocess"
+            );
+
+            await nextFrame();
+
+            /* ---------------- EXTRACT ---------------- */
+
+            setPipelineActive(
+                "stageExtract"
+            );
+
+            setText(
+                "status",
+                "EXTRACTING LUNAR FEATURES..."
+            );
+
+            const featuresA =
+                await extractFeatures(workA);
+
+            const featuresB =
+                await extractFeatures(workB);
+
+            if (
+                featuresA.length <
+                CONFIG.MIN_FEATURES_FOR_ANALYSIS ||
+                featuresB.length <
+                CONFIG.MIN_FEATURES_FOR_ANALYSIS
+            ) {
+                throw new Error(
+                    "Insufficient visual features detected in one or both images."
+                );
+            }
+
+            setPipelineComplete(
+                "stageExtract"
+            );
+
+            await nextFrame();
+
+            /* ---------------- MATCH ---------------- */
+
+            setPipelineActive(
+                "stageMatch"
+            );
+
+            setText(
+                "status",
+                "SEARCHING FOR LUNAR FEATURE CORRESPONDENCES..."
+            );
+
+            const matchResult =
+                await robustMatch(
+                    featuresA,
+                    featuresB
+                );
+
+            const matches =
+                matchResult.matches;
+
+            const rawFeatureComparisons =
+                Math.min(
+                    featuresA.length,
+                    CONFIG.MAX_MATCH_FEATURES
+                ) *
+                Math.min(
+                    featuresB.length,
+                    CONFIG.MAX_MATCH_FEATURES
+                );
+
+            setPipelineComplete(
+                "stageMatch"
+            );
+
+            await nextFrame();
+
+            /* ---------------- VERIFY ---------------- */
+
+            setPipelineActive(
+                "stageVerify"
+            );
+
+            setText(
+                "status",
+                "VERIFYING GEOMETRIC CONSISTENCY..."
+            );
+
+            const verification =
+                verifyGeometry(
+                    matches,
+                    workA,
+                    workB
+                );
+
+            setPipelineComplete(
+                "stageVerify"
+            );
+
+            await nextFrame();
+
+            /* ---------------- SCORE ---------------- */
+
+            setPipelineActive(
+                "stageScore"
+            );
+
+            setText(
+                "status",
+                "CALCULATING EVIDENCE-BASED CONFIDENCE..."
+            );
+
+            const scored =
+                calculateScore(
+                    featuresA,
+                    featuresB,
+                    matches,
+                    verification,
+                    qualityA,
+                    qualityB,
+                    matchResult.mode
+                );
+
+            setPipelineComplete(
+                "stageScore"
+            );
+
+            await nextFrame();
+
+            /* ---------------- REPORT ---------------- */
+
+            setPipelineActive(
+                "stageReport"
+            );
+
+            const processingMs =
+                performance.now() -
+                start;
+
+            const result = {
+                scored,
+                processingMs,
+
+                imageA,
+                imageB,
+
+                workA,
+                workB,
+
+                qualityA,
+                qualityB,
+
+                featuresA,
+                featuresB,
+
+                matches,
+                verification,
+
+                matchingMode:
+                    matchResult.mode,
+
+                rawFeatureComparisons,
+
+                generatedAt:
+                    new Date().toISOString()
+            };
+
+            state.lastAnalysis =
+                result;
+
+            displayResults(
+                result
+            );
+
+            setPipelineComplete(
+                "stageReport"
+            );
+
+            setText(
+                "status",
+                scored.status
+            );
+
+        } catch (error) {
+            console.error(
+                "LUNARMATCH V7 ERROR:",
+                error
+            );
+
+            const current =
+                PIPELINE.find(id => {
+                    const el = $(id);
+                    return (
+                        el &&
+                        el.classList.contains(
+                            "active"
+                        )
+                    );
+                });
+
+            if (current) {
+                setPipelineError(
+                    current
+                );
+            }
+
+            setText(
+                "status",
+                `ANALYSIS ERROR — ${error.message}`
+            );
+        }
+    }
+
+    /* ============================================================
+       IMAGE PREVIEW
+       ============================================================ */
+
+    function updatePreview(
+        input,
+        previewId
+    ) {
         const file =
-          files[0];
+            input.files &&
+            input.files[0];
 
-        console.log(
-          `LUNARMATCH: Image ${slot} dropped:`,
-          file.name,
-          file.type,
-          file.size
+        if (!file) return;
+
+        const preview =
+            $(previewId);
+
+        if (!preview) return;
+
+        const reader =
+            new FileReader();
+
+        reader.onload = event => {
+            preview.src =
+                event.target.result;
+
+            preview.style.display =
+                "";
+        };
+
+        reader.readAsDataURL(file);
+    }
+
+    /* ============================================================
+       IMAGE HANDLING
+       ============================================================ */
+
+    function handleImage(
+        file,
+        side,
+        input
+    ) {
+        try {
+            validateImageFile(file);
+
+            if (side === "A") {
+                state.imageAFile = file;
+
+                updatePreview(
+                    input,
+                    "previewA"
+                );
+            } else {
+                state.imageBFile = file;
+
+                updatePreview(
+                    input,
+                    "previewB"
+                );
+            }
+
+            setText(
+                "status",
+                `${side === "A"
+                    ? "IMAGE A"
+                    : "IMAGE B"} READY — `
+                +
+                file.name
+            );
+
+            setDisabled(
+                "downloadReportBtn",
+                true
+            );
+
+        } catch (error) {
+            setText(
+                "status",
+                `UPLOAD ERROR — ${error.message}`
+            );
+        }
+    }
+
+    /* ============================================================
+       FILE INPUT SETUP
+       ============================================================ */
+
+    function setupImageInput(
+        inputId,
+        side
+    ) {
+        const input =
+            $(inputId);
+
+        if (!input) return;
+
+        input.type = "file";
+
+        input.accept =
+            ".jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff,image/*";
+
+        input.addEventListener(
+            "change",
+            () => {
+                const file =
+                    input.files &&
+                    input.files[0];
+
+                if (file) {
+                    handleImage(
+                        file,
+                        side,
+                        input
+                    );
+                }
+            }
         );
+    }
 
-        await handleImage(
-          file,
-          slot,
-          previewId
-        );
-      }
-    );
+    /* ============================================================
+       DROP ZONE
+       ============================================================ */
 
-    console.log(
-      `LUNARMATCH: Upload zone for Image ${slot} initialized.`
-    );
-  }
+    function setupDropZone(
+        zone,
+        side
+    ) {
+        if (!zone) return;
 
-  /* ============================================================
-     NAVIGATION
-     ============================================================ */
+        const input =
+            side === "A"
+                ? $("fileA")
+                : $("fileB");
 
-  function setupNavigation() {
-    document
-      .querySelectorAll(
-        'a[href^="#"]'
-      )
-      .forEach(
-        link => {
-          link.addEventListener(
+        if (!input) return;
+
+        zone.addEventListener(
             "click",
             event => {
-              const targetID =
-                link.getAttribute(
-                  "href"
+                if (
+                    event.target.tagName ===
+                    "INPUT"
+                ) {
+                    return;
+                }
+
+                input.click();
+            }
+        );
+
+        [
+            "dragenter",
+            "dragover"
+        ].forEach(eventName => {
+            zone.addEventListener(
+                eventName,
+                event => {
+                    event.preventDefault();
+
+                    zone.classList.add(
+                        "drag-active"
+                    );
+                }
+            );
+        });
+
+        [
+            "dragleave",
+            "drop"
+        ].forEach(eventName => {
+            zone.addEventListener(
+                eventName,
+                event => {
+                    event.preventDefault();
+
+                    zone.classList.remove(
+                        "drag-active"
+                    );
+                }
+            );
+        });
+
+        zone.addEventListener(
+            "drop",
+            event => {
+                const files =
+                    event.dataTransfer &&
+                    event.dataTransfer.files;
+
+                if (
+                    files &&
+                    files.length
+                ) {
+                    handleImage(
+                        files[0],
+                        side,
+                        input
+                    );
+                }
+            }
+        );
+    }
+
+    /* ============================================================
+       NAVIGATION
+       ============================================================ */
+
+    function setupNavigation() {
+        document
+            .querySelectorAll(
+                'a[href^="#"]'
+            )
+            .forEach(link => {
+                link.addEventListener(
+                    "click",
+                    event => {
+                        const href =
+                            link.getAttribute(
+                                "href"
+                            );
+
+                        if (
+                            !href ||
+                            href === "#"
+                        ) {
+                            return;
+                        }
+
+                        const target =
+                            document.querySelector(
+                                href
+                            );
+
+                        if (!target) return;
+
+                        event.preventDefault();
+
+                        target.scrollIntoView({
+                            behavior:
+                                "smooth",
+                            block:
+                                "start"
+                        });
+                    }
+                );
+            });
+    }
+
+    /* ============================================================
+       BUTTON EFFECTS
+       ============================================================ */
+
+    function setupButtonEffects() {
+        document
+            .querySelectorAll(
+                "button"
+            )
+            .forEach(button => {
+                button.addEventListener(
+                    "pointerdown",
+                    () => {
+                        button.classList.add(
+                            "button-pressed"
+                        );
+                    }
                 );
 
-              const target =
-                targetID
-                  ? $(
-                      targetID.slice(1)
-                    )
-                  : null;
+                button.addEventListener(
+                    "pointerup",
+                    () => {
+                        button.classList.remove(
+                            "button-pressed"
+                        );
+                    }
+                );
 
-              if (!target) {
-                return;
-              }
-
-              event.preventDefault();
-
-              target.scrollIntoView({
-                behavior:
-                  "smooth",
-
-                block:
-                  "start"
-              });
-            }
-          );
-        }
-      );
-  }
-
-  /* ============================================================
-     BUTTON EFFECTS
-     ============================================================ */
-
-  function setupButtonEffects() {
-    document
-      .querySelectorAll(
-        "button"
-      )
-      .forEach(
-        button => {
-          button.addEventListener(
-            "click",
-            () => {
-              button.classList.remove(
-                "button-pulse"
-              );
-
-              void button.offsetWidth;
-
-              button.classList.add(
-                "button-pulse"
-              );
-            }
-          );
-        }
-      );
-  }
-
-  /* ============================================================
-     CONTACT / REGISTRATION
-     ============================================================ */
-
-  function setupPlaceholderActions() {
-    const registration =
-      $("registrationBtn");
-
-    if (registration) {
-      registration.addEventListener(
-        "click",
-        () => {
-          setText(
-            "status",
-            "REGISTRATION MODULE"
-          );
-
-          setText(
-            "interpretation",
-            "Account registration is reserved for the next LUNARMATCH platform module."
-          );
-        }
-      );
-    }
-
-    const contact =
-      $("contactBtn");
-
-    if (contact) {
-      contact.addEventListener(
-        "click",
-        () => {
-          const target =
-            $("contact");
-
-          if (target) {
-            target.scrollIntoView({
-              behavior:
-                "smooth"
+                button.addEventListener(
+                    "pointerleave",
+                    () => {
+                        button.classList.remove(
+                            "button-pressed"
+                        );
+                    }
+                );
             });
-          }
+    }
+
+    /* ============================================================
+       REPORT GENERATION
+       ============================================================ */
+
+    async function loadJsPDF() {
+        if (
+            window.jspdf &&
+            window.jspdf.jsPDF
+        ) {
+            return window.jspdf.jsPDF;
         }
-      );
+
+        await new Promise(
+            (resolve, reject) => {
+                const script =
+                    document.createElement(
+                        "script"
+                    );
+
+                script.src =
+                    "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+
+                script.onload =
+                    resolve;
+
+                script.onerror =
+                    () => reject(
+                        new Error(
+                            "Unable to load PDF report engine."
+                        )
+                    );
+
+                document.head.appendChild(
+                    script
+                );
+            }
+        );
+
+        return window.jspdf.jsPDF;
     }
-  }
 
-  /* ============================================================
-     INITIALIZATION
-     ============================================================ */
+    async function downloadReport() {
+        if (!state.lastAnalysis) {
+            return;
+        }
 
-  document.addEventListener(
-    "DOMContentLoaded",
-    () => {
-      console.log(
-        "LUNARMATCH: DOM loaded."
-      );
+        try {
+            const jsPDF =
+                await loadJsPDF();
 
-      setupImageInput(
-        "fileA",
-        "previewA",
-        "A"
-      );
+            const result =
+                state.lastAnalysis;
 
-      setupImageInput(
-        "fileB",
-        "previewB",
-        "B"
-      );
+            const doc =
+                new jsPDF({
+                    unit: "mm",
+                    format: "a4"
+                });
 
-      const inputA =
-        $("fileA");
+            const margin = 18;
 
-      const inputB =
-        $("fileB");
+            let y = 20;
 
-      const dropZones =
-        document.querySelectorAll(
-          ".drop-new"
-        );
+            doc.setFontSize(20);
 
-      console.log(
-        "LUNARMATCH upload zones:",
-        dropZones.length
-      );
+            doc.text(
+                "LUNARMATCH",
+                margin,
+                y
+            );
 
-      setupDropZone(
-        dropZones[0],
-        inputA,
-        "previewA",
-        "A"
-      );
+            y += 9;
 
-      setupDropZone(
-        dropZones[1],
-        inputB,
-        "previewB",
-        "B"
-      );
+            doc.setFontSize(10);
 
-      const compare =
-        $("compareBtn");
+            doc.text(
+                "Lunar Image Correspondence Analysis Report",
+                margin,
+                y
+            );
 
-      if (compare) {
-        compare.addEventListener(
-          "click",
-          analyzeImages
-        );
-      } else {
-        console.warn(
-          "LUNARMATCH: compareBtn not found."
-        );
-      }
+            y += 12;
 
-      const report =
-        $("downloadReportBtn");
+            doc.setFontSize(13);
 
-      if (report) {
-        report.addEventListener(
-          "click",
-          downloadReport
-        );
-      } else {
-        console.warn(
-          "LUNARMATCH: downloadReportBtn not found."
-        );
-      }
+            doc.text(
+                "Analysis Summary",
+                margin,
+                y
+            );
 
-      setupNavigation();
+            y += 8;
 
-      setupButtonEffects();
+            doc.setFontSize(10);
 
-      setupPlaceholderActions();
+            const summary = [
+                [
+                    "Status",
+                    result.scored.status
+                ],
+                [
+                    "Overall Match",
+                    `${Math.round(
+                        result.scored.score
+                    )}%`
+                ],
+                [
+                    "Confidence",
+                    result.scored.confidence
+                ],
+                [
+                    "Features A",
+                    `${result.featuresA.length}`
+                ],
+                [
+                    "Features B",
+                    `${result.featuresB.length}`
+                ],
+                [
+                    "Candidate Matches",
+                    `${result.matches.length}`
+                ],
+                [
+                    "Verified Matches",
+                    `${result.verification.inliers.length}`
+                ],
+                [
+                    "Inlier Ratio",
+                    `${round(
+                        result.verification.ratio *
+                        100,
+                        1
+                    )}%`
+                ],
+                [
+                    "Geometric Consistency",
+                    `${round(
+                        result.verification.consistency,
+                        1
+                    )}%`
+                ],
+                [
+                    "Matching Mode",
+                    result.matchingMode
+                ],
+                [
+                    "Processing Time",
+                    formatTime(
+                        result.processingMs
+                    )
+                ]
+            ];
 
-      resetResults();
+            for (const row of summary) {
+                doc.text(
+                    `${row[0]}: ${row[1]}`,
+                    margin,
+                    y
+                );
 
-      console.log(
-        "LUNARMATCH V7 — Enhanced Lunar Correspondence Engine ONLINE"
-      );
+                y += 6;
 
-      console.log(
-        "Engine: Adaptive local normalization + enhanced features + gradient descriptors + mutual matching + RANSAC"
-      );
+                if (y > 270) {
+                    doc.addPage();
+                    y = 20;
+                }
+            }
 
-      console.log(
-        "Upload system: ACTIVE"
-      );
+            y += 7;
 
-      console.log(
-        "Image A input:",
-        !!inputA
-      );
+            doc.setFontSize(13);
 
-      console.log(
-        "Image B input:",
-        !!inputB
-      );
+            doc.text(
+                "Image A",
+                margin,
+                y
+            );
+
+            y += 7;
+
+            doc.setFontSize(10);
+
+            doc.text(
+                `Resolution: ${result.imageA.width} × ${result.imageA.height}`,
+                margin,
+                y
+            );
+
+            y += 6;
+
+            doc.text(
+                `Quality Score: ${round(
+                    result.qualityA.qualityScore,
+                    1
+                )}/100`,
+                margin,
+                y
+            );
+
+            y += 10;
+
+            doc.setFontSize(13);
+
+            doc.text(
+                "Image B",
+                margin,
+                y
+            );
+
+            y += 7;
+
+            doc.setFontSize(10);
+
+            doc.text(
+                `Resolution: ${result.imageB.width} × ${result.imageB.height}`,
+                margin,
+                y
+            );
+
+            y += 6;
+
+            doc.text(
+                `Quality Score: ${round(
+                    result.qualityB.qualityScore,
+                    1
+                )}/100`,
+                margin,
+                y
+            );
+
+            y += 12;
+
+            doc.setFontSize(13);
+
+            doc.text(
+                "Interpretation",
+                margin,
+                y
+            );
+
+            y += 7;
+
+            doc.setFontSize(9);
+
+            const interpretation =
+                buildInterpretation(
+                    result.scored,
+                    result.featuresA,
+                    result.featuresB,
+                    result.matches,
+                    result.verification,
+                    result.matchingMode
+                );
+
+            const lines =
+                doc.splitTextToSize(
+                    interpretation,
+                    174
+                );
+
+            doc.text(
+                lines,
+                margin,
+                y
+            );
+
+            y +=
+                lines.length * 4.5 +
+                10;
+
+            doc.setFontSize(8);
+
+            doc.text(
+                "Generated by LUNARMATCH browser-side correspondence engine.",
+                margin,
+                Math.min(y, 285)
+            );
+
+            doc.save(
+                "LUNARMATCH_Analysis_Report.pdf"
+            );
+
+        } catch (error) {
+            console.error(
+                "PDF ERROR:",
+                error
+            );
+
+            setText(
+                "status",
+                `REPORT ERROR — ${error.message}`
+            );
+        }
     }
-  );
+
+    /* ============================================================
+       REGISTRATION / CONTACT PLACEHOLDERS
+       ============================================================ */
+
+    function setupPlaceholders() {
+        const registrationBtn =
+            $("registrationBtn");
+
+        if (registrationBtn) {
+            registrationBtn.addEventListener(
+                "click",
+                () => {
+                    setText(
+                        "status",
+                        "ACCOUNT FEATURES — COMING SOON"
+                    );
+                }
+            );
+        }
+
+        const contactBtn =
+            $("contactBtn");
+
+        if (contactBtn) {
+            contactBtn.addEventListener(
+                "click",
+                () => {
+                    const contact =
+                        $("contact");
+
+                    if (contact) {
+                        contact.scrollIntoView({
+                            behavior:
+                                "smooth"
+                        });
+                    }
+                }
+            );
+        }
+    }
+
+    /* ============================================================
+       INITIALIZATION
+       ============================================================ */
+
+    function init() {
+        setupImageInput(
+            "fileA",
+            "A"
+        );
+
+        setupImageInput(
+            "fileB",
+            "B"
+        );
+
+        const dropZones =
+            document.querySelectorAll(
+                ".drop-new"
+            );
+
+        if (dropZones.length >= 1) {
+            setupDropZone(
+                dropZones[0],
+                "A"
+            );
+        }
+
+        if (dropZones.length >= 2) {
+            setupDropZone(
+                dropZones[1],
+                "B"
+            );
+        }
+
+        const compareBtn =
+            $("compareBtn");
+
+        if (compareBtn) {
+            compareBtn.addEventListener(
+                "click",
+                analyzeImages
+            );
+        }
+
+        const reportBtn =
+            $("downloadReportBtn");
+
+        if (reportBtn) {
+            reportBtn.addEventListener(
+                "click",
+                downloadReport
+            );
+        }
+
+        setupNavigation();
+        setupButtonEffects();
+        setupPlaceholders();
+
+        resetResults();
+
+        console.log(
+            "LUNARMATCH V7 initialized."
+        );
+
+        console.log(
+            `Feature budget: ${CONFIG.MAX_KEYPOINTS}`
+        );
+
+        console.log(
+            `Match budget: ${CONFIG.MAX_MATCH_FEATURES}`
+        );
+
+        console.log(
+            "Engine: Gradient descriptors + Ratio/Mutual Matching + Affine RANSAC"
+        );
+    }
+
+    if (
+        document.readyState ===
+        "loading"
+    ) {
+        document.addEventListener(
+            "DOMContentLoaded",
+            init
+        );
+    } else {
+        init();
+    }
 
 })();
