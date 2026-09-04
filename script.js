@@ -2311,198 +2311,225 @@
 
     function downloadReport() {
 
-        if (!state.lastAnalysis) {
-            return;
+       async function downloadReport() {
+    if (!state.lastAnalysis) {
+        alert("Please run the correspondence analysis first.");
+        return;
+    }
+
+    const result = state.lastAnalysis;
+
+    try {
+        // Load jsPDF dynamically without changing the rest of the website
+        if (!window.jspdf) {
+            await new Promise((resolve, reject) => {
+                const script = document.createElement("script");
+                script.src =
+                    "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+
+                script.onload = resolve;
+                script.onerror = () =>
+                    reject(new Error("Unable to load PDF generator."));
+
+                document.head.appendChild(script);
+            });
         }
 
-        const r =
-            state.lastAnalysis;
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF();
 
-        const map =
-            $("correspondenceMap");
+        const margin = 18;
+        let y = 20;
 
-        const mapImage =
-            map && map.src
-                ? `<img src="${map.src}" style="max-width:100%;border:1px solid #ccc;">`
-                : "";
+        function line(text, size = 10, bold = false) {
+            pdf.setFontSize(size);
+            pdf.setFont("helvetica", bold ? "bold" : "normal");
 
-        const html = `
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>LUNARMATCH Analysis Report</title>
+            const lines = pdf.splitTextToSize(
+                String(text ?? "—"),
+                174
+            );
 
-<style>
+            pdf.text(lines, margin, y);
+            y += lines.length * 6 + 2;
 
-body {
-    font-family: Arial, sans-serif;
-    margin: 40px;
-    color: #111;
-}
+            if (y > 275) {
+                pdf.addPage();
+                y = 20;
+            }
+        }
 
-h1 {
-    letter-spacing: 2px;
-}
+        // Header
+        line("LUNARMATCH", 22, true);
+        line("Lunar Intelligence Platform", 11, false);
+        line("Lunar Image Correspondence Analysis Report", 12, true);
 
-h2 {
-    margin-top: 30px;
-    border-bottom: 1px solid #ccc;
-    padding-bottom: 8px;
-}
+        y += 4;
 
-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 12px;
-}
+        // Summary
+        line("ANALYSIS SUMMARY", 14, true);
 
-td, th {
-    border: 1px solid #ccc;
-    padding: 10px;
-    text-align: left;
-}
+        line(`Correspondence Score: ${result.score ?? "—"}%`);
+        line(
+            `Confidence: ${
+                result.confidence?.label ?? "—"
+            } (${result.confidence?.value ?? "—"}%)`
+        );
+        line(
+            `Verified Matches: ${
+                result.verifiedMatches ?? "—"
+            }`
+        );
+        line(
+            `Feature Coverage: ${
+                result.featureCoverage ?? "—"
+            }%`
+        );
+        line(
+            `Correspondence Strength: ${
+                result.correspondenceStrength ?? "—"
+            }%`
+        );
+        line(
+            `Inlier Ratio: ${
+                result.inlierRatio ?? "—"
+            }%`
+        );
+        line(
+            `Geometric Consistency: ${
+                result.geometricConsistency ?? "—"
+            }%`
+        );
+        line(
+            `Homography Status: ${
+                result.homographyStatus ?? "—"
+            }`
+        );
+        line(
+            `Verification Status: ${
+                result.verificationStatus ?? "—"
+            }`
+        );
 
-.score {
-    font-size: 42px;
-    font-weight: bold;
-}
+        y += 4;
 
-.note {
-    line-height: 1.6;
-}
+        // Image A
+        line("SOURCE IMAGE A", 14, true);
 
-@media print {
-    body {
-        margin: 20px;
+        line(
+            `Resolution: ${
+                result.resolutionA ?? "—"
+            }`
+        );
+        line(
+            `Keypoints: ${
+                result.keypointsA ?? "—"
+            }`
+        );
+        line(
+            `Contrast: ${
+                result.contrastA ?? "—"
+            }`
+        );
+        line(
+            `Sharpness: ${
+                result.sharpnessA ?? "—"
+            }`
+        );
+        line(
+            `Quality Score: ${
+                result.qualityScoreA ?? "—"
+            }`
+        );
+
+        y += 4;
+
+        // Image B
+        line("REFERENCE IMAGE B", 14, true);
+
+        line(
+            `Resolution: ${
+                result.resolutionB ?? "—"
+            }`
+        );
+        line(
+            `Keypoints: ${
+                result.keypointsB ?? "—"
+            }`
+        );
+        line(
+            `Contrast: ${
+                result.contrastB ?? "—"
+            }`
+        );
+        line(
+            `Sharpness: ${
+                result.sharpnessB ?? "—"
+            }`
+        );
+        line(
+            `Quality Score: ${
+                result.qualityScoreB ?? "—"
+            }`
+        );
+
+        y += 4;
+
+        // Matching statistics
+        line("MATCHING STATISTICS", 14, true);
+
+        line(
+            `Raw Matches: ${
+                result.rawMatches ?? "—"
+            }`
+        );
+        line(
+            `Candidate Matches: ${
+                result.candidateMatches ?? "—"
+            }`
+        );
+        line(
+            `Verified Matches: ${
+                result.verifiedMatches ?? "—"
+            }`
+        );
+
+        y += 4;
+
+        // Interpretation
+        line("SCIENTIFIC INTERPRETATION", 14, true);
+        line(result.interpretation ?? "No interpretation available.");
+
+        y += 4;
+
+        line("LUNARMATCH — Lunar Image Correspondence System", 9, false);
+        line(
+            `Generated: ${new Date().toLocaleString()}`,
+            9,
+            false
+        );
+
+        // Download directly as a PDF
+        pdf.save("LUNARMATCH_Correspondence_Report.pdf");
+
+        setText(
+            "status",
+            "REPORT DOWNLOADED — PDF READY"
+        );
+
+    } catch (error) {
+        console.error("PDF generation error:", error);
+
+        setText(
+            "status",
+            "REPORT ERROR — PDF COULD NOT BE GENERATED"
+        );
+
+        alert(
+            "The PDF could not be generated. Please check your internet connection and try again."
+        );
     }
 }
-
-</style>
-</head>
-
-<body>
-
-<h1>LUNARMATCH</h1>
-
-<p>Lunar Image Correspondence Analysis Report</p>
-
-<h2>Overall Result</h2>
-
-<div class="score">${round(r.score)}%</div>
-
-<table>
-<tr>
-<th>Metric</th>
-<th>Result</th>
-</tr>
-
-<tr>
-<td>Confidence</td>
-<td>${r.confidence.label} (${round(r.confidence.value)}%)</td>
-</tr>
-
-<tr>
-<td>Verified Features</td>
-<td>${r.verifiedMatches}</td>
-</tr>
-
-<tr>
-<td>Candidate Matches</td>
-<td>${r.candidateMatches}</td>
-</tr>
-
-<tr>
-<td>Feature Coverage</td>
-<td>${percent(r.featureCoverage)}</td>
-</tr>
-
-<tr>
-<td>Inlier Ratio</td>
-<td>${percent(r.inlierRatio)}</td>
-</tr>
-
-<tr>
-<td>Geometric Consistency</td>
-<td>${percent(r.geometricConsistency)}</td>
-</tr>
-
-<tr>
-<td>Verification</td>
-<td>${r.verificationStatus}</td>
-</tr>
-
-</table>
-
-
-<h2>Image A</h2>
-
-<table>
-<tr><td>Resolution</td><td>${r.imageA.width} × ${r.imageA.height}</td></tr>
-<tr><td>Keypoints</td><td>${r.imageA.keypoints}</td></tr>
-<tr><td>Contrast</td><td>${percent(r.imageA.contrast)}</td></tr>
-<tr><td>Sharpness</td><td>${percent(r.imageA.sharpness)}</td></tr>
-<tr><td>Quality</td><td>${percent(r.imageA.quality)}</td></tr>
-</table>
-
-
-<h2>Image B</h2>
-
-<table>
-<tr><td>Resolution</td><td>${r.imageB.width} × ${r.imageB.height}</td></tr>
-<tr><td>Keypoints</td><td>${r.imageB.keypoints}</td></tr>
-<tr><td>Contrast</td><td>${percent(r.imageB.contrast)}</td></tr>
-<tr><td>Sharpness</td><td>${percent(r.imageB.sharpness)}</td></tr>
-<tr><td>Quality</td><td>${percent(r.imageB.quality)}</td></tr>
-</table>
-
-
-<h2>Automated Interpretation</h2>
-
-<p class="note">
-${r.interpretation}
-</p>
-
-
-<h2>Correspondence Visualization</h2>
-
-${mapImage}
-
-
-<p style="margin-top:40px;font-size:12px;">
-Generated by LUNARMATCH Lunar Image Correspondence System.
-</p>
-
-<script>
-window.onload = function() {
-    setTimeout(function() {
-        window.print();
-    }, 500);
-};
-</script>
-
-</body>
-</html>
-`;
-
-        const reportWindow =
-            window.open(
-                "",
-                "_blank"
-            );
-
-        if (!reportWindow) {
-
-            updateStatus(
-                "REPORT BLOCKED — ALLOW POPUPS TO GENERATE THE REPORT"
-            );
-
-            return;
-        }
-
-        reportWindow.document.open();
-        reportWindow.document.write(html);
-        reportWindow.document.close();
     }
 
 
