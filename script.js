@@ -1,5 +1,6 @@
 // =========================================================
-// LUNARMATCH — PREMIUM FRONTEND ANALYSIS SYSTEM
+// LUNARMATCH V5 — HYBRID AI FRONTEND
+// LoFTR + Multi-view SIFT + Robust Geometric Verification
 // =========================================================
 
 const fileA = document.getElementById("fileA");
@@ -12,18 +13,17 @@ const dropA = document.querySelectorAll(".drop-new")[0];
 const dropB = document.querySelectorAll(".drop-new")[1];
 
 const compareBtn = document.getElementById("compareBtn");
-const downloadReportBtn = document.getElementById("downloadReportBtn");
+const downloadReportBtn =
+    document.getElementById("downloadReportBtn");
 
-const statusEl = document.getElementById("status");
-const scoreEl = document.getElementById("score");
-const featuresEl = document.getElementById("features");
-const confidenceEl = document.getElementById("confidence");
-const qualityEl = document.getElementById("quality");
-const timeEl = document.getElementById("time");
+const correspondenceMap =
+    document.getElementById("correspondenceMap");
 
-const correspondenceMap = document.getElementById("correspondenceMap");
-const visualPlaceholder = document.getElementById("visualPlaceholder");
-const visualNote = document.getElementById("visualNote");
+const visualPlaceholder =
+    document.getElementById("visualPlaceholder");
+
+const visualNote =
+    document.getElementById("visualNote");
 
 let previewURL_A = null;
 let previewURL_B = null;
@@ -31,22 +31,109 @@ let lastAnalysis = null;
 
 
 // =========================================================
-// SAFE DOM HELPER
+// HELPERS
 // =========================================================
 
 function setText(id, value) {
 
-    const element = document.getElementById(id);
+    const el = document.getElementById(id);
 
-    if (element) {
+    if (!el) return;
 
-        element.textContent =
+    if (
+        value === undefined ||
+        value === null ||
+        value === ""
+    ) {
+        el.textContent = "—";
+        return;
+    }
+
+    el.textContent = value;
+}
+
+
+function numberValue(...values) {
+
+    for (const value of values) {
+
+        if (
             value === undefined ||
             value === null ||
             value === ""
-                ? "—"
-                : value;
+        ) {
+            continue;
+        }
+
+        const n = Number(value);
+
+        if (Number.isFinite(n)) {
+            return n;
+        }
     }
+
+    return NaN;
+}
+
+
+function stringValue(...values) {
+
+    for (const value of values) {
+
+        if (
+            value !== undefined &&
+            value !== null &&
+            String(value).trim() !== ""
+        ) {
+            return String(value);
+        }
+    }
+
+    return "";
+}
+
+
+function percent(value, decimals = 1) {
+
+    const n = Number(value);
+
+    if (!Number.isFinite(n)) {
+        return "—";
+    }
+
+    return `${n.toFixed(decimals)}%`;
+}
+
+
+function numberFormat(value) {
+
+    const n = Number(value);
+
+    if (!Number.isFinite(n)) {
+        return "—";
+    }
+
+    return n.toLocaleString();
+}
+
+
+function seconds(value) {
+
+    const n = Number(value);
+
+    if (!Number.isFinite(n)) {
+        return "—";
+    }
+
+    return `${n.toFixed(2)} sec`;
+}
+
+
+function normalizeConfidence(value) {
+
+    return String(value || "")
+        .trim()
+        .toLowerCase();
 }
 
 
@@ -54,94 +141,120 @@ function setText(id, value) {
 // IMAGE INPUT
 // =========================================================
 
-function setupImageInput(input, preview, drop, name) {
+function setupImageInput(
+    input,
+    preview,
+    drop,
+    name
+) {
 
-    input.addEventListener("change", () => {
-
-        const file = input.files[0];
-
-        if (!file) return;
-
-        if (!file.type.startsWith("image/")) {
-
-            alert(`${name}: Please select a valid image file.`);
-
-            input.value = "";
-
-            return;
-        }
-
-        showPreview(
-            file,
-            preview,
-            drop,
-            name
-        );
-    });
+    if (!input || !preview || !drop) {
+        return;
+    }
 
 
-    drop.addEventListener("dragover", (event) => {
+    input.addEventListener(
+        "change",
+        () => {
 
-        event.preventDefault();
+            const file = input.files[0];
 
-        drop.classList.add("dragging");
-    });
+            if (!file) {
+                return;
+            }
 
+            if (!file.type.startsWith("image/")) {
 
-    drop.addEventListener("dragleave", () => {
+                alert(
+                    `${name}: Please select a valid image file.`
+                );
 
-        drop.classList.remove("dragging");
-    });
+                input.value = "";
 
+                return;
+            }
 
-    drop.addEventListener("drop", (event) => {
-
-        event.preventDefault();
-
-        drop.classList.remove("dragging");
-
-        const file =
-            event.dataTransfer.files[0];
-
-        if (
-            !file ||
-            !file.type.startsWith("image/")
-        ) {
-
-            alert(
-                `${name}: Please drop a valid image file.`
-            );
-
-            return;
-        }
-
-
-        try {
-
-            const dataTransfer =
-                new DataTransfer();
-
-            dataTransfer.items.add(file);
-
-            input.files =
-                dataTransfer.files;
-
-        } catch (error) {
-
-            console.error(
-                "File assignment error:",
-                error
+            showPreview(
+                file,
+                preview,
+                drop,
+                name
             );
         }
+    );
 
 
-        showPreview(
-            file,
-            preview,
-            drop,
-            name
-        );
-    });
+    drop.addEventListener(
+        "dragover",
+        event => {
+
+            event.preventDefault();
+
+            drop.classList.add("dragging");
+        }
+    );
+
+
+    drop.addEventListener(
+        "dragleave",
+        () => {
+
+            drop.classList.remove("dragging");
+        }
+    );
+
+
+    drop.addEventListener(
+        "drop",
+        event => {
+
+            event.preventDefault();
+
+            drop.classList.remove("dragging");
+
+            const file =
+                event.dataTransfer.files[0];
+
+            if (
+                !file ||
+                !file.type.startsWith("image/")
+            ) {
+
+                alert(
+                    `${name}: Please drop a valid image file.`
+                );
+
+                return;
+            }
+
+
+            try {
+
+                const transfer =
+                    new DataTransfer();
+
+                transfer.items.add(file);
+
+                input.files =
+                    transfer.files;
+
+            } catch (error) {
+
+                console.warn(
+                    "File assignment warning:",
+                    error
+                );
+            }
+
+
+            showPreview(
+                file,
+                preview,
+                drop,
+                name
+            );
+        }
+    );
 }
 
 
@@ -174,24 +287,21 @@ function showPreview(
     }
 
 
-    const objectURL =
+    const url =
         URL.createObjectURL(file);
 
 
     if (name === "IMAGE A") {
 
-        previewURL_A =
-            objectURL;
+        previewURL_A = url;
 
     } else {
 
-        previewURL_B =
-            objectURL;
+        previewURL_B = url;
     }
 
 
-    preview.src =
-        objectURL;
+    preview.src = url;
 
     preview.style.display =
         "block";
@@ -207,6 +317,7 @@ function showPreview(
         drop.querySelector(
             ".drop-content"
         );
+
 
     if (content) {
 
@@ -229,59 +340,90 @@ function showPreview(
             ".drop-content strong"
         );
 
+
     if (strong) {
 
         strong.textContent =
             file.name;
     }
+
+
+    lastAnalysis = null;
+
+
+    if (downloadReportBtn) {
+
+        downloadReportBtn.disabled =
+            true;
+    }
 }
 
 
-setupImageInput(
-    fileA,
-    previewA,
-    dropA,
-    "IMAGE A"
-);
+if (
+    fileA &&
+    previewA &&
+    dropA
+) {
+
+    setupImageInput(
+        fileA,
+        previewA,
+        dropA,
+        "IMAGE A"
+    );
+}
 
 
-setupImageInput(
-    fileB,
-    previewB,
-    dropB,
-    "IMAGE B"
-);
+if (
+    fileB &&
+    previewB &&
+    dropB
+) {
+
+    setupImageInput(
+        fileB,
+        previewB,
+        dropB,
+        "IMAGE B"
+    );
+}
 
 
 // =========================================================
-// RESET RESULTS
+// RESET
 // =========================================================
 
 function resetResults() {
 
-    if (statusEl)
-        statusEl.textContent =
-            "READY FOR ANALYSIS";
+    setText(
+        "status",
+        "READY FOR ANALYSIS"
+    );
 
-    if (scoreEl)
-        scoreEl.textContent =
-            "—";
+    setText(
+        "score",
+        "—"
+    );
 
-    if (featuresEl)
-        featuresEl.textContent =
-            "—";
+    setText(
+        "features",
+        "—"
+    );
 
-    if (confidenceEl)
-        confidenceEl.textContent =
-            "—";
+    setText(
+        "confidence",
+        "—"
+    );
 
-    if (qualityEl)
-        qualityEl.textContent =
-            "—";
+    setText(
+        "quality",
+        "—"
+    );
 
-    if (timeEl)
-        timeEl.textContent =
-            "—";
+    setText(
+        "time",
+        "—"
+    );
 
 
     const ids = [
@@ -308,6 +450,7 @@ function resetResults() {
         "geometricConsistency",
         "homographyStatus",
         "verificationStatus"
+
     ];
 
 
@@ -316,8 +459,7 @@ function resetResults() {
     );
 
 
-    const pipelineIds = [
-
+    [
         "stageAcquire",
         "stagePreprocess",
         "stageExtract",
@@ -325,29 +467,25 @@ function resetResults() {
         "stageVerify",
         "stageScore",
         "stageReport"
-    ];
 
+    ].forEach(id => {
 
-    pipelineIds.forEach(id => {
-
-        const element =
+        const el =
             document.getElementById(id);
 
-        if (element) {
+        if (!el) return;
 
-            element.classList.remove(
-                "complete",
-                "active",
-                "failed"
-            );
-        }
+        el.classList.remove(
+            "complete",
+            "active",
+            "failed"
+        );
     });
 
 
     if (correspondenceMap) {
 
-        correspondenceMap.src =
-            "";
+        correspondenceMap.src = "";
 
         correspondenceMap.style.display =
             "none";
@@ -368,23 +506,10 @@ function resetResults() {
     }
 
 
-    if (downloadReportBtn) {
-
-        downloadReportBtn.disabled =
-            true;
-    }
-
-
-    const interpretation =
-        document.getElementById(
-            "interpretation"
-        );
-
-    if (interpretation) {
-
-        interpretation.textContent =
-            "Upload two lunar images and run the correspondence engine to generate a detailed assessment.";
-    }
+    setText(
+        "interpretation",
+        "Upload two lunar images and run the correspondence engine to generate a detailed assessment."
+    );
 
 
     lastAnalysis = null;
@@ -395,74 +520,68 @@ resetResults();
 
 
 // =========================================================
-// PIPELINE STATUS
+// PIPELINE
 // =========================================================
 
-function setPipelineStage(
-    id,
-    state
-) {
+function pipeline(id, state) {
 
-    const element =
+    const el =
         document.getElementById(id);
 
-    if (!element) return;
+    if (!el) return;
 
-    element.classList.remove(
+    el.classList.remove(
         "complete",
         "active",
         "failed"
     );
 
     if (state) {
-
-        element.classList.add(
-            state
-        );
+        el.classList.add(state);
     }
 }
 
 
-function setPipelineRunning() {
+function pipelineRunning() {
 
-    setPipelineStage(
+    pipeline(
         "stageAcquire",
         "complete"
     );
 
-    setPipelineStage(
+    pipeline(
         "stagePreprocess",
         "active"
     );
 
-    setPipelineStage(
+    pipeline(
         "stageExtract",
         ""
     );
 
-    setPipelineStage(
+    pipeline(
         "stageMatch",
         ""
     );
 
-    setPipelineStage(
+    pipeline(
         "stageVerify",
         ""
     );
 
-    setPipelineStage(
+    pipeline(
         "stageScore",
         ""
     );
 
-    setPipelineStage(
+    pipeline(
         "stageReport",
         ""
     );
 }
 
 
-function setPipelineComplete() {
+function pipelineComplete() {
 
     [
         "stageAcquire",
@@ -472,17 +591,17 @@ function setPipelineComplete() {
         "stageVerify",
         "stageScore",
         "stageReport"
-    ].forEach(id => {
 
-        setPipelineStage(
+    ].forEach(
+        id => pipeline(
             id,
             "complete"
-        );
-    });
+        )
+    );
 }
 
 
-function setPipelineFailed() {
+function pipelineFailed() {
 
     [
         "stageAcquire",
@@ -491,76 +610,30 @@ function setPipelineFailed() {
         "stageMatch",
         "stageVerify",
         "stageScore"
+
     ].forEach(id => {
 
-        const element =
+        const el =
             document.getElementById(id);
 
-        if (element) {
+        if (!el) return;
 
-            element.classList.remove(
-                "active"
-            );
+        el.classList.remove(
+            "active"
+        );
 
-            element.classList.add(
-                "failed"
-            );
-        }
+        el.classList.add(
+            "failed"
+        );
     });
 }
 
 
 // =========================================================
-// FORMATTING
+// IMAGE QUALITY
 // =========================================================
 
-function formatPercent(value) {
-
-    const number =
-        Number(value);
-
-    if (!Number.isFinite(number)) {
-
-        return "—";
-    }
-
-    return number.toFixed(1) + "%";
-}
-
-
-function formatNumber(value) {
-
-    const number =
-        Number(value);
-
-    if (!Number.isFinite(number)) {
-
-        return "—";
-    }
-
-    return number.toLocaleString();
-}
-
-
-function formatScore(value) {
-
-    const number =
-        Number(value);
-
-    if (!Number.isFinite(number)) {
-
-        return "—";
-    }
-
-    return number.toFixed(1) + "%";
-}
-
-
-// =========================================================
-// IMAGE QUALITY DISPLAY
-// =========================================================
-
-function displayImageQuality(
+function displayQuality(
     data,
     prefix
 ) {
@@ -574,219 +647,246 @@ function displayImageQuality(
     );
 
 
+    const contrast =
+        numberValue(
+            data.contrast
+        );
+
+
     setText(
         `contrast${prefix}`,
-        data.contrast_score !== undefined
-            ? Number(data.contrast_score).toFixed(1)
+        Number.isFinite(contrast)
+            ? contrast.toFixed(1)
             : "—"
     );
+
+
+    const sharpness =
+        numberValue(
+            data.sharpness
+        );
 
 
     setText(
         `sharpness${prefix}`,
-        data.sharpness_score !== undefined
-            ? Number(data.sharpness_score).toFixed(1)
+        Number.isFinite(sharpness)
+            ? sharpness.toFixed(1)
             : "—"
     );
+
+
+    const score =
+        numberValue(
+            data.score,
+            data.quality_score
+        );
 
 
     setText(
         `qualityScore${prefix}`,
-        data.quality_score !== undefined
-            ? Number(data.quality_score).toFixed(1)
+        Number.isFinite(score)
+            ? score.toFixed(1)
             : "—"
     );
 }
 
 
-// =========================================================
-// AUTOMATED INTERPRETATION
-// =========================================================
+function overallQuality(data) {
 
-function generateInterpretation(
-    data
-) {
-
-    const score =
-        Number(data.match_percentage) || 0;
-
-    const verified =
-        Number(
-            data.verified_matches ??
-            data.corresponding_features ??
-            0
+    const a =
+        numberValue(
+            data.image_quality_a?.score,
+            data.image_quality_a?.quality_score
         );
 
-    const candidate =
-        Number(
-            data.candidate_matches ??
-            0
+
+    const b =
+        numberValue(
+            data.image_quality_b?.score,
+            data.image_quality_b?.quality_score
         );
 
-    const geometric =
-        Number(
-            data.geometric_consistency ??
-            data.inlier_ratio ??
-            0
-        );
 
-    const confidence =
-        typeof data.confidence === "string"
-            ? data.confidence
-            : "Unclassified";
-
-    const quality =
-        typeof data.quality === "string"
-            ? data.quality
-            : "Unknown";
-
-
-    let assessment;
-
-
-    if (
-        confidence === "High"
-    ) {
-
-        assessment =
-            "The correspondence evidence is strong, with a substantial number of verified feature relationships and good geometric consistency.";
-
-    } else if (
-        confidence === "Medium"
-    ) {
-
-        assessment =
-            "The system detected meaningful correspondence evidence, although the geometric or feature evidence is not strong enough for the highest confidence classification.";
-
-    } else {
-
-        assessment =
-            "The system detected limited correspondence evidence. The result should be treated cautiously and may benefit from higher-quality imagery or images with greater shared surface detail.";
-    }
-
-
-    let matchDescription;
-
-
-    if (score >= 70) {
-
-        matchDescription =
-            "The overall correspondence score is strong.";
-
-    } else if (score >= 40) {
-
-        matchDescription =
-            "The overall correspondence score indicates a moderate level of correspondence.";
-
-    } else if (score >= 15) {
-
-        matchDescription =
-            "The overall correspondence score indicates limited-to-moderate correspondence.";
-
-    } else {
-
-        matchDescription =
-            "The overall correspondence score is low.";
-    }
-
-
-    const interpretationText =
-
-        `${assessment} ${matchDescription} ` +
-
-        `The analysis identified ${formatNumber(verified)} verified correspondences ` +
-
-        `from ${formatNumber(candidate)} candidate matches, ` +
-
-        `with approximately ${formatPercent(geometric)} geometric consistency. ` +
-
-        `The assessed image quality was ${quality.toLowerCase()}. ` +
-
-        `This computer-vision result represents measurable image correspondence evidence rather than a probability of geographic identity.`;
-
-
-    setText(
-        "interpretation",
-        interpretationText
+    const values = [
+        a,
+        b
+    ].filter(
+        Number.isFinite
     );
+
+
+    if (!values.length) {
+        return "—";
+    }
+
+
+    const average =
+        values.reduce(
+            (x, y) => x + y,
+            0
+        ) / values.length;
+
+
+    if (average >= 75) {
+        return "EXCELLENT";
+    }
+
+    if (average >= 55) {
+        return "GOOD";
+    }
+
+    if (average >= 35) {
+        return "FAIR";
+    }
+
+    return "LIMITED";
 }
 
 
 // =========================================================
-// DISPLAY ANALYSIS RESULTS
+// RESULTS
 // =========================================================
 
-function displayResults(
-    data
-) {
+function displayResults(data) {
 
     lastAnalysis =
         data;
 
 
-    const matchFound =
-        Boolean(data.match_found);
+    // =====================================================
+    // MAIN SCORE
+    // =====================================================
 
-
-    statusEl.textContent =
-        matchFound
-            ? "MATCH FOUND"
-            : "NO STRONG MATCH";
-
-
-    scoreEl.textContent =
-        formatScore(
-            data.match_percentage
+    const score =
+        numberValue(
+            data.match_percentage,
+            data.correspondence_score,
+            data.score
         );
 
 
-    const verified =
-        Number(
-            data.verified_matches ??
-            data.corresponding_features ??
-            0
+    const confidence =
+        stringValue(
+            data.confidence
         );
 
 
-    const candidate =
-        Number(
-            data.candidate_matches ??
-            0
+    const decision =
+        stringValue(
+            data.decision,
+            data.status
         );
 
 
-    featuresEl.textContent =
-        candidate > 0
-            ? `${formatNumber(verified)} / ${formatNumber(candidate)}`
-            : formatNumber(verified);
+    // =====================================================
+    // LEARNED MATCHER COUNTS
+    // =====================================================
 
-
-    confidenceEl.textContent =
-        data.confidence ||
-        "—";
-
-
-    qualityEl.textContent =
-        data.quality ||
-        "—";
-
-
-    const processingTime =
-        Number(
-            data.processing_time ??
-            data.engine_time
+    const loftrCandidates =
+        numberValue(
+            data.loftr_candidate_matches,
+            data.learned_candidate_matches,
+            data.candidate_matches
         );
 
 
-    timeEl.textContent =
-        Number.isFinite(
-            processingTime
+    const loftrVerified =
+        numberValue(
+            data.loftr_verified_matches,
+            data.learned_verified_matches,
+            data.verified_matches
+        );
+
+
+    // =====================================================
+    // SIFT COUNTS
+    // =====================================================
+
+    const siftCandidates =
+        numberValue(
+            data.sift_candidate_matches
+        );
+
+
+    const siftVerified =
+        numberValue(
+            data.sift_verified_matches
+        );
+
+
+    // =====================================================
+    // TOP RESULT
+    // =====================================================
+
+    let statusText =
+        decision;
+
+
+    if (!statusText) {
+
+        statusText =
+            data.match_found
+                ? "CORRESPONDENCE DETECTED"
+                : "NO RELIABLE CORRESPONDENCE";
+    }
+
+
+    setText(
+        "status",
+        statusText
+    );
+
+
+    setText(
+        "score",
+        percent(score)
+    );
+
+
+    if (
+        Number.isFinite(loftrVerified) &&
+        Number.isFinite(loftrCandidates)
+    ) {
+
+        setText(
+            "features",
+            `${numberFormat(loftrVerified)} / ${numberFormat(loftrCandidates)}`
+        );
+
+    } else {
+
+        setText(
+            "features",
+            "—"
+        );
+    }
+
+
+    setText(
+        "confidence",
+        confidence || "—"
+    );
+
+
+    setText(
+        "quality",
+        overallQuality(data)
+    );
+
+
+    setText(
+        "time",
+        seconds(
+            data.processing_time
         )
-            ? processingTime.toFixed(2) + " sec"
-            : "—";
+    );
 
 
-    displayImageQuality(
+    // =====================================================
+    // IMAGE A
+    // =====================================================
+
+    displayQuality(
         data.image_quality_a,
         "A"
     );
@@ -794,13 +894,17 @@ function displayResults(
 
     setText(
         "keypointsA",
-        formatNumber(
+        numberFormat(
             data.feature_count_a
         )
     );
 
 
-    displayImageQuality(
+    // =====================================================
+    // IMAGE B
+    // =====================================================
+
+    displayQuality(
         data.image_quality_b,
         "B"
     );
@@ -808,133 +912,284 @@ function displayResults(
 
     setText(
         "keypointsB",
-        formatNumber(
+        numberFormat(
             data.feature_count_b
         )
     );
 
 
+    // =====================================================
+    // MATCH COUNTS
+    // =====================================================
+
+    /*
+       RAW MATCHES
+
+       Prefer an explicitly returned raw-match count.
+       Otherwise use learned candidates.
+
+       This prevents us from inventing a value.
+    */
+
+    const rawMatches =
+        numberValue(
+            data.raw_matches,
+            data.raw_match_count
+        );
+
+
     setText(
         "rawMatches",
-        formatNumber(
-            data.raw_matches
-        )
+        Number.isFinite(rawMatches)
+            ? numberFormat(rawMatches)
+            : Number.isFinite(loftrCandidates)
+                ? numberFormat(loftrCandidates)
+                : "—"
     );
 
 
     setText(
         "candidateMatches",
-        formatNumber(
-            data.candidate_matches
-        )
+        Number.isFinite(loftrCandidates)
+            ? numberFormat(loftrCandidates)
+            : "—"
     );
 
 
     setText(
         "verifiedMatches",
-        formatNumber(
-            verified
-        )
+        Number.isFinite(loftrVerified)
+            ? numberFormat(loftrVerified)
+            : "—"
     );
 
 
-    let coverage =
-        data.feature_coverage;
+    // =====================================================
+    // FEATURE / SPATIAL COVERAGE
+    // =====================================================
+
+    const coverage =
+        numberValue(
+            data.feature_coverage,
+            data.spatial_coverage,
+            data.coverage
+        );
+
+
+    setText(
+        "featureCoverage",
+        Number.isFinite(coverage)
+            ? percent(coverage)
+            : "—"
+    );
+
+
+    // =====================================================
+    // CORRESPONDENCE STRENGTH
+    // =====================================================
+
+    const strength =
+        numberValue(
+            data.correspondence_strength,
+            data.match_percentage,
+            data.correspondence_score
+        );
+
+
+    setText(
+        "correspondenceStrength",
+        Number.isFinite(strength)
+            ? percent(strength)
+            : "—"
+    );
+
+
+    // =====================================================
+    // GEOMETRIC VERIFICATION
+    // =====================================================
+
+    /*
+       IMPORTANT:
+
+       Do NOT calculate geometric consistency from
+       spatial coverage.
+
+       If the backend provides a real geometry score,
+       use that.
+
+       Otherwise show the actual inlier ratio.
+    */
+
+    const backendInlierRatio =
+        numberValue(
+            data.inlier_ratio,
+            data.geometry_inlier_ratio
+        );
+
+
+    let inlierRatio =
+        backendInlierRatio;
 
 
     if (
-        coverage === undefined ||
-        coverage === null
+        !Number.isFinite(inlierRatio) &&
+        Number.isFinite(loftrCandidates) &&
+        loftrCandidates > 0 &&
+        Number.isFinite(loftrVerified)
     ) {
 
-        const minimumFeatures =
-            Math.max(
-                1,
-                Math.min(
-                    Number(
-                        data.feature_count_a
-                    ) || 1,
-                    Number(
-                        data.feature_count_b
-                    ) || 1
-                )
-            );
-
-
-        coverage =
+        inlierRatio =
             (
-                verified /
-                minimumFeatures
+                loftrVerified /
+                loftrCandidates
             ) * 100;
     }
 
 
     setText(
-        "featureCoverage",
-        formatPercent(
-            coverage
-        )
-    );
-
-
-    const correspondenceStrength =
-        data.correspondence_strength ??
-        data.match_percentage;
-
-
-    setText(
-        "correspondenceStrength",
-        formatPercent(
-            correspondenceStrength
-        )
-    );
-
-
-    const inlierRatio =
-        data.inlier_ratio ??
-        data.geometric_consistency;
-
-
-    setText(
         "inlierRatio",
-        formatPercent(
-            inlierRatio
-        )
+        Number.isFinite(inlierRatio)
+            ? percent(inlierRatio)
+            : "—"
     );
+
+
+    const geometryConsistency =
+        numberValue(
+            data.geometric_consistency,
+            data.geometry_consistency,
+            data.geometry_score
+        );
 
 
     setText(
         "geometricConsistency",
-        formatPercent(
-            data.geometric_consistency
-        )
+        Number.isFinite(geometryConsistency)
+            ? percent(geometryConsistency)
+            : "—"
     );
+
+
+    // =====================================================
+    // GEOMETRIC MODEL
+    // =====================================================
+
+    const model =
+        stringValue(
+            data.geometry_model,
+            data.verification_model
+        )
+        .toLowerCase();
+
+
+    let modelDisplay =
+        "NOT ESTABLISHED";
+
+
+    if (
+        model.includes("homography")
+    ) {
+
+        modelDisplay =
+            "HOMOGRAPHY / RANSAC";
+
+    } else if (
+        model.includes("affine")
+    ) {
+
+        modelDisplay =
+            "AFFINE / RANSAC";
+
+    } else if (
+        model.includes("fundamental")
+    ) {
+
+        modelDisplay =
+            "FUNDAMENTAL / RANSAC";
+
+    } else if (
+        model.includes("ransac")
+    ) {
+
+        modelDisplay =
+            "RANSAC";
+    }
 
 
     setText(
         "homographyStatus",
-        data.homography_verified
-            ? "VERIFIED"
-            : "NOT VERIFIED"
+        modelDisplay
     );
 
 
-    setText(
-        "verificationStatus",
-        verified >= 1
-            ? "CORRESPONDENCES VERIFIED"
-            : "NO VERIFIED CORRESPONDENCES"
-    );
+    // =====================================================
+    // VERIFICATION STATUS
+    // =====================================================
 
+    const verification =
+        stringValue(
+            data.verification_status
+        );
+
+
+    if (verification) {
+
+        setText(
+            "verificationStatus",
+            verification
+        );
+
+    } else if (
+        Number.isFinite(loftrVerified) &&
+        loftrVerified >= 1
+    ) {
+
+        setText(
+            "verificationStatus",
+            "CORRESPONDENCES VERIFIED"
+        );
+
+    } else {
+
+        setText(
+            "verificationStatus",
+            "NO VERIFIED CORRESPONDENCES"
+        );
+    }
+
+
+    // =====================================================
+    // VISUALIZATION
+    // =====================================================
 
     if (
         data.visualization &&
         correspondenceMap
     ) {
 
+        let visualizationURL =
+            String(
+                data.visualization
+            );
+
+
+        /*
+           Cache-busting is only needed for the same
+           output filename being overwritten repeatedly.
+        */
+
+        const separator =
+            visualizationURL.includes("?")
+                ? "&"
+                : "?";
+
+
+        visualizationURL +=
+            `${separator}t=${Date.now()}`;
+
+
         correspondenceMap.src =
-            "data:image/jpeg;base64," +
-            data.visualization;
+            visualizationURL;
 
 
         correspondenceMap.style.display =
@@ -949,30 +1204,44 @@ function displayResults(
     }
 
 
+    // =====================================================
+    // VISUALIZATION NOTE
+    // =====================================================
+
     if (visualNote) {
 
-        const geometric =
-            Number(
-                data.geometric_consistency
+        const geometry =
+            stringValue(
+                data.geometry_model,
+                data.verification_model
             );
 
 
         if (
-            Number.isFinite(
-                geometric
-            )
+            Number.isFinite(loftrVerified)
         ) {
 
             visualNote.textContent =
-                `● ${formatNumber(verified)} verified correspondences · ${formatPercent(geometric)} geometric consistency`;
+                `● ${numberFormat(loftrVerified)} verified learned correspondences · ${geometry || "robust geometric verification"}`;
+
+        } else if (
+            Number.isFinite(siftVerified)
+        ) {
+
+            visualNote.textContent =
+                `● ${numberFormat(siftVerified)} verified classical correspondences · ${geometry || "robust geometric verification"}`;
 
         } else {
 
             visualNote.textContent =
-                `● ${formatNumber(verified)} verified feature correspondences returned by the analysis engine.`;
+                "● Verified feature correspondences generated by the hybrid analysis engine.";
         }
     }
 
+
+    // =====================================================
+    // ENGINE
+    // =====================================================
 
     const visualEngine =
         document.getElementById(
@@ -983,23 +1252,208 @@ function displayResults(
     if (visualEngine) {
 
         visualEngine.textContent =
-            "SIFT + FLANN + RANSAC";
+            stringValue(
+                data.engine,
+                data.method
+            ) ||
+            "HYBRID LOFTR + MULTI-VIEW SIFT";
     }
 
+
+    // =====================================================
+    // INTERPRETATION
+    // =====================================================
 
     generateInterpretation(
         data
     );
 
 
-    setPipelineComplete();
+    // =====================================================
+    // PIPELINE
+    // =====================================================
 
+    pipelineComplete();
+
+
+    // =====================================================
+    // REPORT
+    // =====================================================
 
     if (downloadReportBtn) {
 
         downloadReportBtn.disabled =
             false;
     }
+
+
+    console.log(
+        "LUNARMATCH V5 RESULT:",
+        data
+    );
+}
+
+
+// =========================================================
+// INTERPRETATION
+// =========================================================
+
+function generateInterpretation(data) {
+
+    const score =
+        numberValue(
+            data.match_percentage,
+            data.correspondence_score,
+            data.score
+        );
+
+
+    const verified =
+        numberValue(
+            data.loftr_verified_matches,
+            data.learned_verified_matches,
+            data.verified_matches
+        );
+
+
+    const candidates =
+        numberValue(
+            data.loftr_candidate_matches,
+            data.learned_candidate_matches,
+            data.candidate_matches
+        );
+
+
+    const confidence =
+        stringValue(
+            data.confidence
+        );
+
+
+    const geometry =
+        stringValue(
+            data.geometry_model,
+            data.verification_model
+        );
+
+
+    const confidenceLevel =
+        normalizeConfidence(
+            confidence
+        );
+
+
+    // =====================================================
+    // ASSESSMENT
+    // =====================================================
+
+    let assessment;
+
+
+    if (
+        confidenceLevel === "high"
+    ) {
+
+        assessment =
+            "The hybrid correspondence engine detected strong supporting visual evidence with multiple geometrically consistent relationships.";
+
+    } else if (
+        confidenceLevel === "medium"
+    ) {
+
+        assessment =
+            "The hybrid correspondence engine detected meaningful visual correspondence, but the available geometric evidence does not support a high-confidence classification.";
+
+    } else {
+
+        assessment =
+            "The engine detected limited correspondence evidence. The result should therefore be treated cautiously, particularly when illumination, scale, viewpoint, terrain appearance, or image quality differ significantly.";
+    }
+
+
+    // =====================================================
+    // SCORE INTERPRETATION
+    // =====================================================
+
+    let scoreText;
+
+
+    if (
+        Number.isFinite(score) &&
+        score >= 70
+    ) {
+
+        scoreText =
+            "The overall correspondence evidence is strong.";
+
+    } else if (
+        Number.isFinite(score) &&
+        score >= 40
+    ) {
+
+        scoreText =
+            "The overall correspondence evidence is moderate.";
+
+    } else if (
+        Number.isFinite(score) &&
+        score >= 20
+    ) {
+
+        scoreText =
+            "The overall correspondence evidence is limited.";
+
+    } else {
+
+        scoreText =
+            "The overall correspondence evidence is low.";
+    }
+
+
+    // =====================================================
+    // MATCH COUNTS
+    // =====================================================
+
+    const verifiedText =
+        Number.isFinite(verified)
+            ? numberFormat(verified)
+            : "an unknown number of";
+
+
+    const candidateText =
+        Number.isFinite(candidates)
+            ? numberFormat(candidates)
+            : "an unknown number of";
+
+
+    const geometryText =
+        geometry ||
+        "a stable geometric model";
+
+
+    // =====================================================
+    // FINAL INTERPRETATION
+    // =====================================================
+
+    const text =
+
+        `${assessment} ` +
+
+        `${scoreText} ` +
+
+        `The analysis produced ${candidateText} learned candidate correspondences, ` +
+
+        `of which ${verifiedText} survived robust geometric verification using ${geometryText}. ` +
+
+        `The final correspondence score is ${percent(score)} with ${confidence || "unreported"} confidence. ` +
+
+        `This score represents measured image-correspondence evidence, not a probability that the two images depict the same geographic location.`;
+
+
+
+    setText(
+        "interpretation",
+        text
+    );
 }
 
 
@@ -1009,12 +1463,30 @@ function displayResults(
 
 async function compareImages() {
 
+    if (
+        !fileA ||
+        !fileB
+    ) {
+
+        console.error(
+            "LUNARMATCH: input elements not found."
+        );
+
+        return;
+    }
+
+
     const imageA =
         fileA.files[0];
+
 
     const imageB =
         fileB.files[0];
 
+
+    // =====================================================
+    // VALIDATE INPUTS
+    // =====================================================
 
     if (
         !imageA ||
@@ -1042,36 +1514,54 @@ async function compareImages() {
     }
 
 
-    compareBtn.disabled =
-        true;
+    // =====================================================
+    // BUTTON STATE
+    // =====================================================
+
+    if (compareBtn) {
+
+        compareBtn.disabled =
+            true;
+
+        compareBtn.innerHTML =
+            `<span>ANALYZING LUNAR DATA...</span><b>◌</b>`;
+    }
 
 
-    compareBtn.innerHTML =
-        `<span>ANALYZING LUNAR DATA...</span><b>◌</b>`;
+    setText(
+        "status",
+        "ANALYSIS IN PROGRESS"
+    );
 
 
-    statusEl.textContent =
-        "ANALYSIS IN PROGRESS";
+    setText(
+        "score",
+        "···"
+    );
 
 
-    scoreEl.textContent =
-        "···";
+    setText(
+        "features",
+        "Processing"
+    );
 
 
-    featuresEl.textContent =
-        "Processing";
+    setText(
+        "confidence",
+        "Processing"
+    );
 
 
-    confidenceEl.textContent =
-        "Processing";
+    setText(
+        "quality",
+        "Processing"
+    );
 
 
-    qualityEl.textContent =
-        "Processing";
-
-
-    timeEl.textContent =
-        "Processing";
+    setText(
+        "time",
+        "Processing"
+    );
 
 
     if (downloadReportBtn) {
@@ -1083,8 +1573,7 @@ async function compareImages() {
 
     if (correspondenceMap) {
 
-        correspondenceMap.src =
-            "";
+        correspondenceMap.src = "";
 
         correspondenceMap.style.display =
             "none";
@@ -1098,27 +1587,47 @@ async function compareImages() {
     }
 
 
-    setPipelineRunning();
+    if (visualNote) {
+
+        visualNote.textContent =
+            "● Running learned correspondence and geometric verification...";
+    }
+
+
+    pipelineRunning();
 
 
     // =====================================================
-    // IMPORTANT:
-    // Backend expects imageA and imageB
+    // REQUEST
     // =====================================================
 
     const formData =
         new FormData();
 
 
+    /*
+       IMPORTANT
+
+       The current frontend/backend contract uses:
+
+       imageA
+       imageB
+
+       Do NOT change these to image1/image2 unless
+       the Flask backend is changed too.
+    */
+
     formData.append(
         "imageA",
-        imageA
+        imageA,
+        imageA.name
     );
 
 
     formData.append(
         "imageB",
-        imageB
+        imageB,
+        imageB.name
     );
 
 
@@ -1146,7 +1655,7 @@ async function compareImages() {
             data =
                 await response.json();
 
-        } catch (jsonError) {
+        } catch (error) {
 
             throw new Error(
                 "The analysis server returned an invalid response."
@@ -1164,7 +1673,8 @@ async function compareImages() {
 
 
         if (
-            data.processing_time === undefined
+            data.processing_time ===
+            undefined
         ) {
 
             data.processing_time =
@@ -1179,13 +1689,6 @@ async function compareImages() {
             data
         );
 
-
-        console.log(
-            "LUNARMATCH PREMIUM ANALYSIS:",
-            data
-        );
-
-
     } catch (error) {
 
         console.error(
@@ -1194,31 +1697,43 @@ async function compareImages() {
         );
 
 
-        statusEl.textContent =
-            "ANALYSIS FAILED";
+        setText(
+            "status",
+            "ANALYSIS FAILED"
+        );
 
 
-        scoreEl.textContent =
-            "—";
+        setText(
+            "score",
+            "—"
+        );
 
 
-        featuresEl.textContent =
-            "—";
+        setText(
+            "features",
+            "—"
+        );
 
 
-        confidenceEl.textContent =
-            "—";
+        setText(
+            "confidence",
+            "—"
+        );
 
 
-        qualityEl.textContent =
-            "—";
+        setText(
+            "quality",
+            "—"
+        );
 
 
-        timeEl.textContent =
-            "—";
+        setText(
+            "time",
+            "—"
+        );
 
 
-        setPipelineFailed();
+        pipelineFailed();
 
 
         if (correspondenceMap) {
@@ -1238,6 +1753,13 @@ async function compareImages() {
         }
 
 
+        if (visualNote) {
+
+            visualNote.textContent =
+                "● Correspondence visualization unavailable because the analysis failed.";
+        }
+
+
         if (downloadReportBtn) {
 
             downloadReportBtn.disabled =
@@ -1250,23 +1772,27 @@ async function compareImages() {
             "Unable to complete image analysis."
         );
 
-
     } finally {
 
-        compareBtn.disabled =
-            false;
+        if (compareBtn) {
 
+            compareBtn.disabled =
+                false;
 
-        compareBtn.innerHTML =
-            `<span>RUN CORRESPONDENCE ENGINE</span><b>→</b>`;
+            compareBtn.innerHTML =
+                `<span>RUN CORRESPONDENCE ENGINE</span><b>→</b>`;
+        }
     }
 }
 
 
-compareBtn.addEventListener(
-    "click",
-    compareImages
-);
+if (compareBtn) {
+
+    compareBtn.addEventListener(
+        "click",
+        compareImages
+    );
+}
 
 
 // =========================================================
@@ -1275,22 +1801,10 @@ compareBtn.addEventListener(
 
 async function downloadReport() {
 
-    const imageA =
-        fileA.files[0];
-
-    const imageB =
-        fileB.files[0];
-
-
     if (
-        !imageA ||
-        !imageB
+        !fileA ||
+        !fileB
     ) {
-
-        alert(
-            "Please upload both images before generating the report."
-        );
-
         return;
     }
 
@@ -1305,36 +1819,55 @@ async function downloadReport() {
     }
 
 
-    downloadReportBtn.disabled =
-        true;
-
-
-    downloadReportBtn.innerHTML =
-        "GENERATING REPORT...";
-
-
-    const formData =
-        new FormData();
-
-
-    // =====================================================
-    // IMPORTANT:
-    // Backend expects imageA and imageB
-    // =====================================================
-
-    formData.append(
-        "imageA",
-        imageA
-    );
-
-
-    formData.append(
-        "imageB",
-        imageB
-    );
-
-
     try {
+
+        /*
+           First attempt:
+
+           Send the original images + analysis data.
+           This is more useful for a Flask report endpoint
+           that regenerates the PDF from the source images.
+        */
+
+        const formData =
+            new FormData();
+
+
+        const imageA =
+            fileA.files[0];
+
+
+        const imageB =
+            fileB.files[0];
+
+
+        if (imageA) {
+
+            formData.append(
+                "imageA",
+                imageA,
+                imageA.name
+            );
+        }
+
+
+        if (imageB) {
+
+            formData.append(
+                "imageB",
+                imageB,
+                imageB.name
+            );
+        }
+
+
+        formData.append(
+            "analysis",
+            JSON.stringify(
+                lastAnalysis
+            )
+        );
+
 
         const response =
             await fetch(
@@ -1346,31 +1879,105 @@ async function downloadReport() {
             );
 
 
+        const contentType =
+            response.headers.get(
+                "content-type"
+            ) || "";
+
+
         if (!response.ok) {
 
-            let message =
-                "Could not generate PDF report.";
+            let errorText =
+                "Could not generate report.";
 
 
             try {
 
-                const data =
-                    await response.json();
+                if (
+                    contentType.includes(
+                        "application/json"
+                    )
+                ) {
 
-                if (data.error) {
+                    const data =
+                        await response.json();
 
-                    message =
-                        data.error;
+
+                    if (data.error) {
+
+                        errorText =
+                            data.error;
+                    }
                 }
 
             } catch (_) {}
 
 
             throw new Error(
-                message
+                errorText
             );
         }
 
+
+        // =================================================
+        // JSON REPORT URL
+        // =================================================
+
+        if (
+            contentType.includes(
+                "application/json"
+            )
+        ) {
+
+            const data =
+                await response.json();
+
+
+            const reportURL =
+                data.report ||
+                data.url ||
+                data.pdf;
+
+
+            if (reportURL) {
+
+                const link =
+                    document.createElement(
+                        "a"
+                    );
+
+
+                link.href =
+                    reportURL;
+
+
+                link.target =
+                    "_blank";
+
+
+                link.rel =
+                    "noopener";
+
+
+                document.body.appendChild(
+                    link
+                );
+
+
+                link.click();
+
+
+                link.remove();
+
+
+                return;
+            }
+        }
+
+
+        // =================================================
+        // DIRECT PDF RESPONSE
+        // =================================================
 
         const blob =
             await response.blob();
@@ -1411,29 +2018,134 @@ async function downloadReport() {
             url
         );
 
-
     } catch (error) {
 
         console.error(
-            "PDF REPORT ERROR:",
+            "REPORT ERROR:",
             error
         );
 
 
+        /*
+           Fallback:
+
+           If the current backend expects JSON rather
+           than multipart form data, try that too.
+        */
+
+        try {
+
+            const fallbackResponse =
+                await fetch(
+                    "/api/report",
+                    {
+                        method: "POST",
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
+                        body:
+                            JSON.stringify(
+                                lastAnalysis
+                            )
+                    }
+                );
+
+
+            if (
+                fallbackResponse.ok
+            ) {
+
+                const contentType =
+                    fallbackResponse.headers.get(
+                        "content-type"
+                    ) || "";
+
+
+                if (
+                    contentType.includes(
+                        "application/json"
+                    )
+                ) {
+
+                    const data =
+                        await fallbackResponse.json();
+
+
+                    const reportURL =
+                        data.report ||
+                        data.url ||
+                        data.pdf;
+
+
+                    if (reportURL) {
+
+                        window.open(
+                            reportURL,
+                            "_blank"
+                        );
+
+                        return;
+                    }
+                }
+
+
+                const blob =
+                    await fallbackResponse.blob();
+
+
+                const url =
+                    window.URL.createObjectURL(
+                        blob
+                    );
+
+
+                const link =
+                    document.createElement(
+                        "a"
+                    );
+
+
+                link.href =
+                    url;
+
+
+                link.download =
+                    "LUNARMATCH_Analysis_Report.pdf";
+
+
+                document.body.appendChild(
+                    link
+                );
+
+
+                link.click();
+
+
+                link.remove();
+
+
+                window.URL.revokeObjectURL(
+                    url
+                );
+
+
+                return;
+            }
+
+        } catch (fallbackError) {
+
+            console.error(
+                "REPORT FALLBACK ERROR:",
+                fallbackError
+            );
+        }
+
+
         alert(
             error.message ||
-            "Unable to generate the PDF report."
+            "Unable to generate report."
         );
-
-
-    } finally {
-
-        downloadReportBtn.disabled =
-            false;
-
-
-        downloadReportBtn.innerHTML =
-            `DOWNLOAD PDF REPORT <span>↓</span>`;
     }
 }
 
@@ -1506,9 +2218,13 @@ window.addEventListener(
 
 
 // =========================================================
-// INITIAL SYSTEM MESSAGE
+// STARTUP
 // =========================================================
 
 console.log(
-    "LUNARMATCH Premium Frontend initialized."
+    "LUNARMATCH V5 frontend initialized."
+);
+
+console.log(
+    "Engine: LoFTR + Multi-view SIFT + Robust Geometric Verification"
 );
