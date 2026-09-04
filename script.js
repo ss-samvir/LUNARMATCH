@@ -1,3265 +1,2650 @@
-// =========================================================
-// LUNARMATCH — FREE BROWSER ANALYSIS ENGINE
-// Browser-side ORB + Robust Geometric Verification
-//
-// Captain's V5.3 server.py remains preserved separately.
-// This frontend engine avoids Render/PyTorch RAM limits.
-// =========================================================
+/* ============================================================
+   LUNARMATCH
+   Lunar Image Correspondence System
+   Browser Analysis Engine — Professional Prototype
+   ============================================================ */
 
-const fileA = document.getElementById("fileA");
-const fileB = document.getElementById("fileB");
+(() => {
+    "use strict";
 
-const previewA = document.getElementById("previewA");
-const previewB = document.getElementById("previewB");
+    /* ---------------------------------------------------------
+       GLOBAL STATE
+    --------------------------------------------------------- */
 
-const dropA = document.querySelectorAll(".drop-new")[0];
-const dropB = document.querySelectorAll(".drop-new")[1];
+    let imageAFile = null;
+    let imageBFile = null;
+    let imageAData = null;
+    let imageBData = null;
+    let lastAnalysis = null;
 
-const compareBtn = document.getElementById("compareBtn");
-const downloadReportBtn =
-    document.getElementById("downloadReportBtn");
+    let cvReadyPromise = null;
+    let pdfReadyPromise = null;
 
-const correspondenceMap =
-    document.getElementById("correspondenceMap");
+    const MAX_IMAGE_DIMENSION = 1100;
+    const ORB_FEATURES = 4000;
+    const LOWE_RATIO = 0.78;
+    const MAX_VISUAL_MATCHES = 80;
 
-const visualPlaceholder =
-    document.getElementById("visualPlaceholder");
+    /* ---------------------------------------------------------
+       DOM HELPERS
+    --------------------------------------------------------- */
 
-const visualNote =
-    document.getElementById("visualNote");
+    const $ = (id) => document.getElementById(id);
 
-let previewURL_A = null;
-let previewURL_B = null;
-let lastAnalysis = null;
-
-let cvReady = false;
-
-
-// =========================================================
-// HELPERS
-// =========================================================
-
-function setText(id, value) {
-
-    const el = document.getElementById(id);
-
-    if (!el) return;
-
-    if (
-        value === undefined ||
-        value === null ||
-        value === ""
-    ) {
-        el.textContent = "—";
-        return;
+    function setText(id, value) {
+        const el = $(id);
+        if (el) el.textContent = value;
     }
 
-    el.textContent = value;
-}
+    function show(id, visible = true) {
+        const el = $(id);
+        if (!el) return;
 
-
-function numberValue(...values) {
-
-    for (const value of values) {
-
-        if (
-            value === undefined ||
-            value === null ||
-            value === ""
-        ) {
-            continue;
-        }
-
-        const n = Number(value);
-
-        if (Number.isFinite(n)) {
-            return n;
+        if (visible) {
+            el.style.display = "";
+            el.removeAttribute("hidden");
+        } else {
+            el.style.display = "none";
         }
     }
 
-    return NaN;
-}
-
-
-function numberFormat(value) {
-
-    const n = Number(value);
-
-    if (!Number.isFinite(n)) {
-        return "—";
+    function setDisabled(id, disabled) {
+        const el = $(id);
+        if (el) el.disabled = disabled;
     }
 
-    return n.toLocaleString();
-}
-
-
-function percent(value, decimals = 1) {
-
-    const n = Number(value);
-
-    if (!Number.isFinite(n)) {
-        return "—";
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    return `${n.toFixed(decimals)}%`;
-}
-
-
-function seconds(value) {
-
-    const n = Number(value);
-
-    if (!Number.isFinite(n)) {
-        return "—";
+    function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
     }
 
-    return `${n.toFixed(2)} sec`;
-}
+    function round(value, decimals = 1) {
+        const p = Math.pow(10, decimals);
+        return Math.round(value * p) / p;
+    }
 
+    function formatMs(ms) {
+        if (!Number.isFinite(ms)) return "—";
+        return `${round(ms / 1000, 2)} sec`;
+    }
 
-function clamp(value, min, max) {
+    /* ---------------------------------------------------------
+       RESULT RESET
+    --------------------------------------------------------- */
 
-    return Math.max(
-        min,
-        Math.min(max, value)
-    );
-}
+    function resetResults() {
+        setText("status", "READY");
+        setText("score", "—");
+        setText("features", "—");
+        setText("confidence", "—");
+        setText("quality", "—");
+        setText("time", "—");
 
+        const ids = [
+            "resolutionA",
+            "keypointsA",
+            "contrastA",
+            "sharpnessA",
+            "qualityScoreA",
 
-// =========================================================
-// LOAD OPENCV.JS
-// =========================================================
+            "resolutionB",
+            "keypointsB",
+            "contrastB",
+            "sharpnessB",
+            "qualityScoreB",
 
-function loadOpenCV() {
+            "rawMatches",
+            "candidateMatches",
+            "verifiedMatches",
+            "featureCoverage",
+            "correspondenceStrength",
 
-    return new Promise((resolve, reject) => {
+            "inlierRatio",
+            "geometricConsistency",
+            "homographyStatus",
+            "verificationStatus"
+        ];
 
-        if (
-            window.cv &&
-            typeof window.cv.Mat === "function"
-        ) {
+        ids.forEach(id => setText(id, "—"));
 
-            cvReady = true;
+        setText("interpretation",
+            "Upload two lunar images to begin correspondence analysis."
+        );
 
-            resolve();
+        const visual = $("correspondenceMap");
 
-            return;
+        if (visual) {
+            visual.removeAttribute("src");
+            visual.style.display = "none";
         }
 
+        show("visualPlaceholder", true);
 
-        const existing =
-            document.querySelector(
+        const note = $("visualNote");
+        if (note) {
+            note.textContent =
+                "Verified correspondences will appear here after analysis.";
+        }
+
+        resetPipeline();
+
+        setDisabled("downloadReportBtn", true);
+
+        lastAnalysis = null;
+    }
+
+    /* ---------------------------------------------------------
+       PIPELINE
+    --------------------------------------------------------- */
+
+    const pipelineStages = [
+        ["stageAcquire", "ACQUIRE"],
+        ["stagePreprocess", "PREPROCESS"],
+        ["stageExtract", "EXTRACT"],
+        ["stageMatch", "MATCH"],
+        ["stageVerify", "VERIFY"],
+        ["stageScore", "SCORE"],
+        ["stageReport", "REPORT"]
+    ];
+
+    function resetPipeline() {
+        pipelineStages.forEach(([id]) => {
+            const el = $(id);
+            if (!el) return;
+
+            el.classList.remove("active", "complete", "error");
+        });
+    }
+
+    function pipelineActive(index) {
+        pipelineStages.forEach(([id], i) => {
+            const el = $(id);
+            if (!el) return;
+
+            el.classList.remove("active", "complete", "error");
+
+            if (i < index) el.classList.add("complete");
+            if (i === index) el.classList.add("active");
+        });
+    }
+
+    function pipelineComplete() {
+        pipelineStages.forEach(([id]) => {
+            const el = $(id);
+            if (!el) return;
+
+            el.classList.remove("active", "error");
+            el.classList.add("complete");
+        });
+    }
+
+    function pipelineError(index) {
+        const [id] = pipelineStages[index] || [];
+        const el = $(id);
+
+        if (el) {
+            el.classList.remove("active");
+            el.classList.add("error");
+        }
+    }
+
+    /* ---------------------------------------------------------
+       IMAGE VALIDATION
+    --------------------------------------------------------- */
+
+    function isImageFile(file) {
+        if (!file) return false;
+
+        if (file.type && file.type.startsWith("image/")) {
+            return true;
+        }
+
+        const name = file.name.toLowerCase();
+
+        return /\.(jpg|jpeg|png|webp|tif|tiff|bmp)$/i.test(name);
+    }
+
+    function validateFile(file) {
+        if (!file) {
+            throw new Error("No image selected.");
+        }
+
+        if (!isImageFile(file)) {
+            throw new Error(
+                "Unsupported image format. Use JPG, JPEG, PNG, WEBP, TIFF or BMP."
+            );
+        }
+
+        if (file.size > 25 * 1024 * 1024) {
+            throw new Error("Image exceeds the 25 MB upload limit.");
+        }
+
+        return true;
+    }
+
+    /* ---------------------------------------------------------
+       IMAGE PREVIEW
+    --------------------------------------------------------- */
+
+    function showPreview(file, previewId) {
+        const preview = $(previewId);
+        if (!preview) return;
+
+        const url = URL.createObjectURL(file);
+
+        preview.src = url;
+        preview.style.display = "block";
+
+        preview.onload = () => {
+            URL.revokeObjectURL(url);
+        };
+    }
+
+    /* ---------------------------------------------------------
+       FILE READER
+    --------------------------------------------------------- */
+
+    function fileToDataURL(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(
+                new Error("Unable to read the selected image.")
+            );
+
+            reader.readAsDataURL(file);
+        });
+    }
+
+    function loadImageElement(source) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+
+            img.onload = () => resolve(img);
+
+            img.onerror = () => reject(
+                new Error("The selected image could not be decoded.")
+            );
+
+            img.src = source;
+        });
+    }
+
+    /* ---------------------------------------------------------
+       CANVAS IMAGE NORMALIZATION
+    --------------------------------------------------------- */
+
+    async function imageToMat(file) {
+        const dataURL = await fileToDataURL(file);
+        const img = await loadImageElement(dataURL);
+
+        let width = img.naturalWidth || img.width;
+        let height = img.naturalHeight || img.height;
+
+        const scale = Math.min(
+            1,
+            MAX_IMAGE_DIMENSION / Math.max(width, height)
+        );
+
+        width = Math.max(1, Math.round(width * scale));
+        height = Math.max(1, Math.round(height * scale));
+
+        const canvas = document.createElement("canvas");
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext("2d", {
+            willReadFrequently: true
+        });
+
+        ctx.drawImage(img, 0, 0, width, height);
+
+        return {
+            mat: cv.imread(canvas),
+            width,
+            height,
+            originalWidth: img.naturalWidth || img.width,
+            originalHeight: img.naturalHeight || img.height
+        };
+    }
+
+    /* ---------------------------------------------------------
+       OPENCV LOADER
+    --------------------------------------------------------- */
+
+    function waitForOpenCV() {
+        if (window.cv && typeof window.cv.Mat === "function") {
+            return Promise.resolve(window.cv);
+        }
+
+        if (cvReadyPromise) return cvReadyPromise;
+
+        cvReadyPromise = new Promise((resolve, reject) => {
+            const existing = document.querySelector(
                 'script[data-lunarmatch-opencv="true"]'
             );
 
+            if (existing) {
+                const timer = setInterval(() => {
+                    if (
+                        window.cv &&
+                        typeof window.cv.Mat === "function"
+                    ) {
+                        clearInterval(timer);
+                        resolve(window.cv);
+                    }
+                }, 100);
 
-        if (existing) {
-
-            existing.addEventListener(
-                "load",
-                () => {
-
-                    waitForOpenCV(
-                        resolve,
-                        reject
+                setTimeout(() => {
+                    clearInterval(timer);
+                    reject(
+                        new Error(
+                            "OpenCV.js failed to initialize."
+                        )
                     );
-                }
-            );
-
-            existing.addEventListener(
-                "error",
-                reject
-            );
-
-            return;
-        }
-
-
-        const script =
-            document.createElement("script");
-
-
-        script.src =
-            "https://docs.opencv.org/4.x/opencv.js";
-
-
-        script.async = true;
-
-        script.dataset.lunarmatchOpencv =
-            "true";
-
-
-        script.onload = () => {
-
-            waitForOpenCV(
-                resolve,
-                reject
-            );
-        };
-
-
-        script.onerror = () => {
-
-            reject(
-                new Error(
-                    "OpenCV.js could not be loaded. Please check your internet connection and try again."
-                )
-            );
-        };
-
-
-        document.head.appendChild(
-            script
-        );
-    });
-}
-
-
-function waitForOpenCV(
-    resolve,
-    reject
-) {
-
-    const start =
-        Date.now();
-
-
-    const timer =
-        setInterval(() => {
-
-            if (
-                window.cv &&
-                typeof window.cv.Mat === "function"
-            ) {
-
-                clearInterval(timer);
-
-                cvReady = true;
-
-                resolve();
+                }, 30000);
 
                 return;
             }
 
-
-            if (
-                Date.now() - start >
-                15000
-            ) {
-
-                clearInterval(timer);
-
-                reject(
-                    new Error(
-                        "OpenCV.js initialization timed out."
-                    )
-                );
-            }
-
-        }, 100);
-}
-
-
-// =========================================================
-// IMAGE INPUT
-// =========================================================
-
-function setupImageInput(
-    input,
-    preview,
-    drop,
-    name
-) {
-
-    if (!input || !preview || !drop) {
-        return;
-    }
-
-
-    input.addEventListener(
-        "change",
-        () => {
-
-            const file =
-                input.files[0];
-
-            if (!file) return;
-
-
-            if (
-                !file.type.startsWith("image/")
-            ) {
-
-                alert(
-                    `${name}: Please select a valid image file.`
-                );
-
-                input.value = "";
-
-                return;
-            }
-
-
-            showPreview(
-                file,
-                preview,
-                drop,
-                name
-            );
-        }
-    );
-
-
-    drop.addEventListener(
-        "dragover",
-        event => {
-
-            event.preventDefault();
-
-            drop.classList.add(
-                "dragging"
-            );
-        }
-    );
-
-
-    drop.addEventListener(
-        "dragleave",
-        () => {
-
-            drop.classList.remove(
-                "dragging"
-            );
-        }
-    );
-
-
-    drop.addEventListener(
-        "drop",
-        event => {
-
-            event.preventDefault();
-
-            drop.classList.remove(
-                "dragging"
-            );
-
-
-            const file =
-                event.dataTransfer.files[0];
-
-
-            if (
-                !file ||
-                !file.type.startsWith("image/")
-            ) {
-
-                alert(
-                    `${name}: Please drop a valid image file.`
-                );
-
-                return;
-            }
-
-
-            try {
-
-                const transfer =
-                    new DataTransfer();
-
-                transfer.items.add(file);
-
-                input.files =
-                    transfer.files;
-
-            } catch (error) {
-
-                console.warn(
-                    "File assignment warning:",
-                    error
-                );
-            }
-
-
-            showPreview(
-                file,
-                preview,
-                drop,
-                name
-            );
-        }
-    );
-}
-
-
-function showPreview(
-    file,
-    preview,
-    drop,
-    name
-) {
-
-    if (
-        name === "IMAGE A" &&
-        previewURL_A
-    ) {
-
-        URL.revokeObjectURL(
-            previewURL_A
-        );
-    }
-
-
-    if (
-        name === "IMAGE B" &&
-        previewURL_B
-    ) {
-
-        URL.revokeObjectURL(
-            previewURL_B
-        );
-    }
-
-
-    const url =
-        URL.createObjectURL(file);
-
-
-    if (name === "IMAGE A") {
-
-        previewURL_A = url;
-
-    } else {
-
-        previewURL_B = url;
-    }
-
-
-    preview.src = url;
-
-    preview.style.display =
-        "block";
-
-    preview.style.visibility =
-        "visible";
-
-    preview.style.opacity =
-        "1";
-
-
-    const content =
-        drop.querySelector(
-            ".drop-content"
-        );
-
-
-    if (content) {
-
-        content.style.opacity =
-            "0";
-    }
-
-
-    drop.classList.add(
-        "has-image"
-    );
-
-
-    drop.dataset.filename =
-        file.name;
-
-
-    const strong =
-        drop.querySelector(
-            ".drop-content strong"
-        );
-
-
-    if (strong) {
-
-        strong.textContent =
-            file.name;
-    }
-
-
-    lastAnalysis = null;
-
-
-    if (downloadReportBtn) {
-
-        downloadReportBtn.disabled =
-            true;
-    }
-}
-
-
-if (
-    fileA &&
-    previewA &&
-    dropA
-) {
-
-    setupImageInput(
-        fileA,
-        previewA,
-        dropA,
-        "IMAGE A"
-    );
-}
-
-
-if (
-    fileB &&
-    previewB &&
-    dropB
-) {
-
-    setupImageInput(
-        fileB,
-        previewB,
-        dropB,
-        "IMAGE B"
-    );
-}
-
-
-// =========================================================
-// RESET
-// =========================================================
-
-function resetResults() {
-
-    setText(
-        "status",
-        "READY FOR ANALYSIS"
-    );
-
-    setText(
-        "score",
-        "—"
-    );
-
-    setText(
-        "features",
-        "—"
-    );
-
-    setText(
-        "confidence",
-        "—"
-    );
-
-    setText(
-        "quality",
-        "—"
-    );
-
-    setText(
-        "time",
-        "—"
-    );
-
-
-    const ids = [
-
-        "resolutionA",
-        "keypointsA",
-        "contrastA",
-        "sharpnessA",
-        "qualityScoreA",
-
-        "resolutionB",
-        "keypointsB",
-        "contrastB",
-        "sharpnessB",
-        "qualityScoreB",
-
-        "rawMatches",
-        "candidateMatches",
-        "verifiedMatches",
-        "featureCoverage",
-        "correspondenceStrength",
-
-        "inlierRatio",
-        "geometricConsistency",
-        "homographyStatus",
-        "verificationStatus"
-
-    ];
-
-
-    ids.forEach(
-        id => setText(id, "—")
-    );
-
-
-    [
-        "stageAcquire",
-        "stagePreprocess",
-        "stageExtract",
-        "stageMatch",
-        "stageVerify",
-        "stageScore",
-        "stageReport"
-
-    ].forEach(id => {
-
-        const el =
-            document.getElementById(id);
-
-        if (!el) return;
-
-        el.classList.remove(
-            "complete",
-            "active",
-            "failed"
-        );
-    });
-
-
-    if (correspondenceMap) {
-
-        correspondenceMap.src = "";
-
-        correspondenceMap.style.display =
-            "none";
-    }
-
-
-    if (visualPlaceholder) {
-
-        visualPlaceholder.style.display =
-            "block";
-    }
-
-
-    if (visualNote) {
-
-        visualNote.textContent =
-            "● Verified feature correspondences will appear here after analysis.";
-    }
-
-
-    setText(
-        "interpretation",
-        "Upload two lunar images and run the correspondence engine to generate a detailed assessment."
-    );
-
-
-    lastAnalysis = null;
-}
-
-
-resetResults();
-
-
-// =========================================================
-// PIPELINE
-// =========================================================
-
-function pipeline(id, state) {
-
-    const el =
-        document.getElementById(id);
-
-    if (!el) return;
-
-
-    el.classList.remove(
-        "complete",
-        "active",
-        "failed"
-    );
-
-
-    if (state) {
-
-        el.classList.add(
-            state
-        );
-    }
-}
-
-
-function pipelineRunning() {
-
-    pipeline(
-        "stageAcquire",
-        "complete"
-    );
-
-    pipeline(
-        "stagePreprocess",
-        "active"
-    );
-
-    pipeline(
-        "stageExtract",
-        ""
-    );
-
-    pipeline(
-        "stageMatch",
-        ""
-    );
-
-    pipeline(
-        "stageVerify",
-        ""
-    );
-
-    pipeline(
-        "stageScore",
-        ""
-    );
-
-    pipeline(
-        "stageReport",
-        ""
-    );
-}
-
-
-function pipelineComplete() {
-
-    [
-        "stageAcquire",
-        "stagePreprocess",
-        "stageExtract",
-        "stageMatch",
-        "stageVerify",
-        "stageScore",
-        "stageReport"
-
-    ].forEach(
-        id =>
-            pipeline(
-                id,
-                "complete"
-            )
-    );
-}
-
-
-function pipelineFailed() {
-
-    [
-        "stageAcquire",
-        "stagePreprocess",
-        "stageExtract",
-        "stageMatch",
-        "stageVerify",
-        "stageScore"
-
-    ].forEach(id => {
-
-        const el =
-            document.getElementById(id);
-
-        if (!el) return;
-
-
-        el.classList.remove(
-            "active"
-        );
-
-
-        el.classList.add(
-            "failed"
-        );
-    });
-}
-
-
-// =========================================================
-// IMAGE QUALITY
-// =========================================================
-
-function calculateImageQuality(
-    image
-) {
-
-    const width =
-        image.cols;
-
-    const height =
-        image.rows;
-
-
-    const gray =
-        new cv.Mat();
-
-
-    cv.cvtColor(
-        image,
-        gray,
-        cv.COLOR_RGBA2GRAY
-    );
-
-
-    const mean =
-        new cv.Mat();
-
-
-    const stddev =
-        new cv.Mat();
-
-
-    cv.meanStdDev(
-        gray,
-        mean,
-        stddev
-    );
-
-
-    const contrast =
-        stddev.doubleAt(0, 0);
-
-
-    const laplacian =
-        new cv.Mat();
-
-
-    cv.Laplacian(
-        gray,
-        laplacian,
-        cv.CV_64F
-    );
-
-
-    const lapMean =
-        new cv.Mat();
-
-
-    const lapStd =
-        new cv.Mat();
-
-
-    cv.meanStdDev(
-        laplacian,
-        lapMean,
-        lapStd
-    );
-
-
-    const sharpness =
-        Math.pow(
-            lapStd.doubleAt(0, 0),
-            2
-        );
-
-
-    const resolutionPixels =
-        width * height;
-
-
-    const resolutionScore =
-        clamp(
-            (
-                Math.sqrt(
-                    resolutionPixels
-                ) / 1200
-            ) * 100,
-            0,
-            100
-        );
-
-
-    const contrastScore =
-        clamp(
-            contrast * 2.2,
-            0,
-            100
-        );
-
-
-    const sharpnessScore =
-        clamp(
-            Math.log10(
-                Math.max(
-                    sharpness,
-                    1
-                )
-            ) * 18,
-            0,
-            100
-        );
-
-
-    const score =
-        (
-            resolutionScore * 0.25 +
-            contrastScore * 0.30 +
-            sharpnessScore * 0.45
-        );
-
-
-    let quality =
-        "LIMITED";
-
-
-    if (score >= 75) {
-
-        quality =
-            "EXCELLENT";
-
-    } else if (score >= 55) {
-
-        quality =
-            "GOOD";
-
-    } else if (score >= 35) {
-
-        quality =
-            "FAIR";
-    }
-
-
-    const result = {
-
-        resolution:
-            `${width} × ${height}`,
-
-        contrast,
-
-        sharpness,
-
-        score,
-
-        quality
-    };
-
-
-    gray.delete();
-    mean.delete();
-    stddev.delete();
-    laplacian.delete();
-    lapMean.delete();
-    lapStd.delete();
-
-
-    return result;
-}
-
-
-// =========================================================
-// IMAGE LOADING
-// =========================================================
-
-function fileToMat(file) {
-
-    return new Promise(
-        (resolve, reject) => {
-
-            const url =
-                URL.createObjectURL(
-                    file
-                );
-
-
-            const image =
-                new Image();
-
-
-            image.onload = () => {
-
-                try {
-
-                    const canvas =
-                        document.createElement(
-                            "canvas"
-                        );
-
-
-                    const MAX =
-                        1000;
-
-
-                    let width =
-                        image.naturalWidth;
-
-
-                    let height =
-                        image.naturalHeight;
-
-
-                    const scale =
-                        Math.min(
-                            1,
-                            MAX /
-                            Math.max(
-                                width,
-                                height
-                            )
-                        );
-
-
-                    width =
-                        Math.max(
-                            1,
-                            Math.round(
-                                width * scale
-                            )
-                        );
-
-
-                    height =
-                        Math.max(
-                            1,
-                            Math.round(
-                                height * scale
-                            )
-                        );
-
-
-                    canvas.width =
-                        width;
-
-                    canvas.height =
-                        height;
-
-
-                    const ctx =
-                        canvas.getContext(
-                            "2d",
-                            {
-                                willReadFrequently:
-                                    true
-                            }
-                        );
-
-
-                    ctx.drawImage(
-                        image,
-                        0,
-                        0,
-                        width,
-                        height
+            const script = document.createElement("script");
+
+            script.src = "https://docs.opencv.org/4.x/opencv.js";
+            script.async = true;
+            script.dataset.lunarmatchOpencv = "true";
+
+            script.onload = () => {
+                const timer = setInterval(() => {
+                    if (
+                        window.cv &&
+                        typeof window.cv.Mat === "function"
+                    ) {
+                        clearInterval(timer);
+                        resolve(window.cv);
+                    }
+                }, 100);
+
+                setTimeout(() => {
+                    clearInterval(timer);
+                    reject(
+                        new Error(
+                            "OpenCV.js loaded but did not initialize."
+                        )
                     );
-
-
-                    const mat =
-                        cv.imread(
-                            canvas
-                        );
-
-
-                    URL.revokeObjectURL(
-                        url
-                    );
-
-
-                    resolve(mat);
-
-                } catch (error) {
-
-                    URL.revokeObjectURL(
-                        url
-                    );
-
-                    reject(error);
-                }
+                }, 30000);
             };
 
-
-            image.onerror = () => {
-
-                URL.revokeObjectURL(
-                    url
-                );
-
+            script.onerror = () => {
                 reject(
                     new Error(
-                        "Unable to read one of the uploaded images."
+                        "Unable to load OpenCV.js. Check the internet connection."
                     )
                 );
             };
 
+            document.head.appendChild(script);
+        });
 
-            image.src =
-                url;
+        return cvReadyPromise;
+    }
+
+    /* ---------------------------------------------------------
+       GRAYSCALE
+    --------------------------------------------------------- */
+
+    function toGray(mat) {
+        const gray = new cv.Mat();
+
+        if (mat.channels() === 1) {
+            mat.copyTo(gray);
+        } else if (mat.channels() === 4) {
+            cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
+        } else {
+            cv.cvtColor(mat, gray, cv.COLOR_RGB2GRAY);
         }
-    );
-}
 
+        return gray;
+    }
 
-// =========================================================
-// ORB FEATURE EXTRACTION
-// =========================================================
+    /* ---------------------------------------------------------
+       CLAHE
+    --------------------------------------------------------- */
 
-function extractFeatures(
-    image
-) {
+    function enhanceGray(gray) {
+        const enhanced = new cv.Mat();
 
-    const gray =
-        new cv.Mat();
+        try {
+            if (typeof cv.createCLAHE === "function") {
+                const clahe = cv.createCLAHE(2.0, new cv.Size(8, 8));
 
+                clahe.apply(gray, enhanced);
 
-    cv.cvtColor(
-        image,
-        gray,
-        cv.COLOR_RGBA2GRAY
-    );
+                if (clahe.delete) clahe.delete();
 
+                return enhanced;
+            }
+        } catch (error) {
+            // fallback below
+        }
 
-    const clahe =
-        new cv.Mat();
+        try {
+            cv.equalizeHist(gray, enhanced);
+            return enhanced;
+        } catch (error) {
+            gray.copyTo(enhanced);
+            return enhanced;
+        }
+    }
 
+    /* ---------------------------------------------------------
+       IMAGE QUALITY
+    --------------------------------------------------------- */
 
-    const claheObject =
-        new cv.CLAHE(
-            2.0,
-            new cv.Size(
+    function calculateImageQuality(mat) {
+        const gray = toGray(mat);
+
+        const mean = new cv.Mat();
+        const stddev = new cv.Mat();
+
+        let contrast = 0;
+        let sharpness = 0;
+
+        try {
+            cv.meanStdDev(gray, mean, stddev);
+
+            const values = stddev.data64F || stddev.data32F;
+
+            if (values && values.length) {
+                contrast = Number(values[0]) || 0;
+            }
+        } catch (error) {
+            contrast = 0;
+        }
+
+        try {
+            const lap = new cv.Mat();
+
+            cv.Laplacian(
+                gray,
+                lap,
+                cv.CV_64F
+            );
+
+            const lapMean = new cv.Mat();
+            const lapStd = new cv.Mat();
+
+            cv.meanStdDev(
+                lap,
+                lapMean,
+                lapStd
+            );
+
+            const values = lapStd.data64F || lapStd.data32F;
+
+            if (values && values.length) {
+                sharpness = Math.pow(
+                    Number(values[0]) || 0,
+                    2
+                );
+            }
+
+            lap.delete();
+            lapMean.delete();
+            lapStd.delete();
+        } catch (error) {
+            sharpness = 0;
+        }
+
+        mean.delete();
+        stddev.delete();
+        gray.delete();
+
+        const contrastScore = clamp(
+            (contrast / 64) * 100,
+            0,
+            100
+        );
+
+        const sharpnessScore = clamp(
+            (Math.log10(sharpness + 1) / 4.5) * 100,
+            0,
+            100
+        );
+
+        const qualityScore = clamp(
+            contrastScore * 0.45 +
+            sharpnessScore * 0.55,
+            0,
+            100
+        );
+
+        let label = "POOR";
+
+        if (qualityScore >= 75) {
+            label = "EXCELLENT";
+        } else if (qualityScore >= 58) {
+            label = "GOOD";
+        } else if (qualityScore >= 40) {
+            label = "FAIR";
+        }
+
+        return {
+            contrast,
+            sharpness,
+            contrastScore,
+            sharpnessScore,
+            score: qualityScore,
+            label
+        };
+    }
+
+    /* ---------------------------------------------------------
+       ORB CREATION
+    --------------------------------------------------------- */
+
+    function createORB() {
+        if (typeof cv.ORB_create === "function") {
+            return cv.ORB_create(
+                ORB_FEATURES,
+                1.2,
                 8,
-                8
-            )
-        );
+                31,
+                0,
+                2,
+                0,
+                31,
+                20
+            );
+        }
 
+        if (typeof cv.ORB === "function") {
+            return new cv.ORB(
+                ORB_FEATURES,
+                1.2,
+                8,
+                31,
+                0,
+                2,
+                0,
+                31,
+                20
+            );
+        }
 
-    claheObject.apply(
-        gray,
-        clahe
-    );
-
-
-    const keypoints =
-        new cv.KeyPointVector();
-
-
-    const descriptors =
-        new cv.Mat();
-
-
-    const orb =
-        new cv.ORB(
-            4000,
-            1.2,
-            8,
-            31,
-            0,
-            2,
-            cv.ORB_HARRIS_SCORE,
-            31,
-            20
-        );
-
-
-    orb.detectAndCompute(
-        clahe,
-        new cv.Mat(),
-        keypoints,
-        descriptors
-    );
-
-
-    const result = {
-
-        gray,
-        clahe,
-        keypoints,
-        descriptors,
-
-        count:
-            keypoints.size()
-    };
-
-
-    claheObject.delete();
-    orb.delete();
-
-
-    return result;
-}
-
-
-// =========================================================
-// MATCH FEATURES
-// =========================================================
-
-function matchFeatures(
-    descriptorsA,
-    descriptorsB
-) {
-
-    if (
-        descriptorsA.empty() ||
-        descriptorsB.empty()
-    ) {
-
-        return [];
+        throw new Error("ORB is unavailable in this OpenCV.js build.");
     }
 
+    /* ---------------------------------------------------------
+       FEATURE EXTRACTION
+    --------------------------------------------------------- */
 
-    const matcher =
-        new cv.BFMatcher(
+    function extractFeatures(mat) {
+        const gray = toGray(mat);
+        const enhanced = enhanceGray(gray);
+
+        const keypoints = new cv.KeyPointVector();
+        const descriptors = new cv.Mat();
+
+        const orb = createORB();
+
+        try {
+            orb.detectAndCompute(
+                enhanced,
+                new cv.Mat(),
+                keypoints,
+                descriptors,
+                false
+            );
+        } catch (error) {
+            if (orb.delete) orb.delete();
+            gray.delete();
+            enhanced.delete();
+            keypoints.delete();
+            descriptors.delete();
+
+            throw error;
+        }
+
+        if (orb.delete) orb.delete();
+
+        gray.delete();
+        enhanced.delete();
+
+        return {
+            keypoints,
+            descriptors,
+            count: keypoints.size()
+        };
+    }
+
+    /* ---------------------------------------------------------
+       KEYPOINT CONVERSION
+    --------------------------------------------------------- */
+
+    function keypointXY(keypoint) {
+        if (!keypoint) return { x: 0, y: 0 };
+
+        if (typeof keypoint.pt !== "undefined") {
+            return {
+                x: Number(keypoint.pt.x),
+                y: Number(keypoint.pt.y)
+            };
+        }
+
+        if (
+            typeof keypoint.pt_x !== "undefined" &&
+            typeof keypoint.pt_y !== "undefined"
+        ) {
+            return {
+                x: Number(keypoint.pt_x),
+                y: Number(keypoint.pt_y)
+            };
+        }
+
+        return {
+            x: 0,
+            y: 0
+        };
+    }
+
+    /* ---------------------------------------------------------
+       MATCHING
+    --------------------------------------------------------- */
+
+    function matchDescriptors(descA, descB) {
+        if (
+            !descA ||
+            !descB ||
+            descA.rows < 2 ||
+            descB.rows < 2
+        ) {
+            return {
+                rawMatches: 0,
+                candidates: []
+            };
+        }
+
+        const matcher = new cv.BFMatcher(
             cv.NORM_HAMMING,
             false
         );
 
+        let knn = null;
 
-    const knn =
-        new cv.DMatchVectorVector();
+        try {
+            knn = new cv.DMatchVectorVector();
 
+            matcher.knnMatch(
+                descA,
+                descB,
+                knn,
+                2
+            );
 
-    matcher.knnMatch(
-        descriptorsA,
-        descriptorsB,
-        knn,
-        2
-    );
+            const candidates = [];
 
+            for (let i = 0; i < knn.size(); i++) {
+                const pair = knn.get(i);
 
-    const goodMatches = [];
+                if (!pair || pair.size() < 2) {
+                    if (pair && pair.delete) pair.delete();
+                    continue;
+                }
 
+                const first = pair.get(0);
+                const second = pair.get(1);
 
-    for (
-        let i = 0;
-        i < knn.size();
-        i++
-    ) {
+                const d1 = Number(first.distance);
+                const d2 = Number(second.distance);
 
-        const pair =
-            knn.get(i);
+                if (
+                    Number.isFinite(d1) &&
+                    Number.isFinite(d2) &&
+                    d2 > 0 &&
+                    d1 < LOWE_RATIO * d2
+                ) {
+                    candidates.push({
+                        queryIdx: Number(first.queryIdx),
+                        trainIdx: Number(first.trainIdx),
+                        distance: d1,
+                        ratio: d1 / d2
+                    });
+                }
 
+                if (pair.delete) pair.delete();
+            }
 
-        if (
-            pair.size() < 2
-        ) {
+            if (matcher.delete) matcher.delete();
+            if (knn.delete) knn.delete();
 
-            continue;
+            candidates.sort(
+                (a, b) => a.distance - b.distance
+            );
+
+            return {
+                rawMatches: Math.min(
+                    descA.rows,
+                    descB.rows
+                ),
+                candidates
+            };
+        } catch (error) {
+            if (matcher.delete) matcher.delete();
+            if (knn && knn.delete) knn.delete();
+
+            throw error;
         }
-
-
-        const first =
-            pair.get(0);
-
-
-        const second =
-            pair.get(1);
-
-
-        // Lowe ratio test
-        if (
-            first.distance <
-            0.78 *
-            second.distance
-        ) {
-
-            goodMatches.push({
-                queryIdx:
-                    first.queryIdx,
-
-                trainIdx:
-                    first.trainIdx,
-
-                distance:
-                    first.distance
-            });
-        }
-
-
-        pair.delete();
     }
 
+    /* ---------------------------------------------------------
+       REMOVE DUPLICATE CORRESPONDENCES
+    --------------------------------------------------------- */
 
-    knn.delete();
-    matcher.delete();
+    function deduplicateMatches(matches) {
+        const usedA = new Set();
+        const usedB = new Set();
 
+        const result = [];
 
-    return goodMatches;
-}
-
-
-// =========================================================
-// GEOMETRIC VERIFICATION
-// =========================================================
-
-function verifyGeometry(
-    featuresA,
-    featuresB,
-    matches
-) {
-
-    if (
-        matches.length < 4
-    ) {
-
-        return {
-
-            verifiedMatches: 0,
-
-            inlierRatio: 0,
-
-            geometricConsistency: 0,
-
-            coverage: 0,
-
-            model:
-                "NOT ESTABLISHED",
-
-            homography:
-                null,
-
-            mask:
-                null
-        };
-    }
-
-
-    const pointsA =
-        new cv.Mat();
-
-
-    const pointsB =
-        new cv.Mat();
-
-
-    const pointArrayA = [];
-    const pointArrayB = [];
-
-
-    for (
-        const match of matches
-    ) {
-
-        const kpA =
-            featuresA.keypoints.get(
-                match.queryIdx
-            );
-
-
-        const kpB =
-            featuresB.keypoints.get(
-                match.trainIdx
-            );
-
-
-        pointArrayA.push(
-            kpA.pt.x,
-            kpA.pt.y
-        );
-
-
-        pointArrayB.push(
-            kpB.pt.x,
-            kpB.pt.y
-        );
-    }
-
-
-    pointsA.create(
-        matches.length,
-        1,
-        cv.CV_32FC2
-    );
-
-
-    pointsB.create(
-        matches.length,
-        1,
-        cv.CV_32FC2
-    );
-
-
-    for (
-        let i = 0;
-        i < matches.length;
-        i++
-    ) {
-
-        pointsA.data32F[
-            i * 2
-        ] =
-            pointArrayA[
-                i * 2
-            ];
-
-        pointsA.data32F[
-            i * 2 + 1
-        ] =
-            pointArrayA[
-                i * 2 + 1
-            ];
-
-
-        pointsB.data32F[
-            i * 2
-        ] =
-            pointArrayB[
-                i * 2
-            ];
-
-        pointsB.data32F[
-            i * 2 + 1
-        ] =
-            pointArrayB[
-                i * 2 + 1
-            ];
-    }
-
-
-    const mask =
-        new cv.Mat();
-
-
-    let homography =
-        null;
-
-
-    try {
-
-        homography =
-            cv.findHomography(
-                pointsA,
-                pointsB,
-                cv.RANSAC,
-                5,
-                mask
-            );
-
-    } catch (error) {
-
-        console.warn(
-            "Homography verification failed:",
-            error
-        );
-    }
-
-
-    let verified =
-        0;
-
-
-    if (
-        !mask.empty()
-    ) {
-
-        for (
-            let i = 0;
-            i < mask.rows;
-            i++
-        ) {
-
+        for (const match of matches) {
             if (
-                mask.ucharAt(
-                    i,
-                    0
-                ) > 0
+                usedA.has(match.queryIdx) ||
+                usedB.has(match.trainIdx)
             ) {
+                continue;
+            }
 
-                verified++;
+            usedA.add(match.queryIdx);
+            usedB.add(match.trainIdx);
+
+            result.push(match);
+        }
+
+        return result;
+    }
+
+    /* ---------------------------------------------------------
+       GEOMETRIC VERIFICATION
+    --------------------------------------------------------- */
+
+    function maskValue(mask, index) {
+        if (!mask) return 0;
+
+        try {
+            if (mask.rows === 1) {
+                return mask.ucharAt(0, index);
+            }
+
+            return mask.ucharAt(index, 0);
+        } catch (error) {
+            return 0;
+        }
+    }
+
+    function verifyGeometry(
+        keypointsA,
+        keypointsB,
+        matches
+    ) {
+        if (matches.length < 4) {
+            return {
+                verified: [],
+                inlierRatio: 0,
+                geometricConsistency: 0,
+                homographyFound: false
+            };
+        }
+
+        const src = [];
+        const dst = [];
+
+        for (const match of matches) {
+            const a = keypointXY(
+                keypointsA.get(match.queryIdx)
+            );
+
+            const b = keypointXY(
+                keypointsB.get(match.trainIdx)
+            );
+
+            src.push(a.x, a.y);
+            dst.push(b.x, b.y);
+        }
+
+        const srcMat = cv.matFromArray(
+            matches.length,
+            2,
+            cv.CV_32FC2,
+            src
+        );
+
+        const dstMat = cv.matFromArray(
+            matches.length,
+            2,
+            cv.CV_32FC2,
+            dst
+        );
+
+        let H = null;
+        let mask = null;
+
+        try {
+            H = cv.findHomography(
+                srcMat,
+                dstMat,
+                cv.RANSAC,
+                5.0
+            );
+
+            if (H && typeof H === "object" && H.mask) {
+                mask = H.mask;
+                H = H.homography || H.H || null;
+            }
+
+            if (!mask && H && H.rows === 3 && H.cols === 3) {
+                // Some OpenCV.js builds return the mask separately
+                // through the API internals; affine fallback below.
+            }
+        } catch (error) {
+            H = null;
+        }
+
+        let verified = [];
+
+        if (mask) {
+            for (let i = 0; i < matches.length; i++) {
+                if (maskValue(mask, i) !== 0) {
+                    verified.push(matches[i]);
+                }
             }
         }
-    }
 
-
-    const inlierRatio =
-        matches.length > 0
-            ? (
-                verified /
-                matches.length
-            ) * 100
-            : 0;
-
-
-    // 4 × 4 spatial coverage
-    const occupied =
-        new Set();
-
-
-    for (
-        let i = 0;
-        i < matches.length;
-        i++
-    ) {
+        /* -----------------------------------------------------
+           AFFINE FALLBACK
+        ----------------------------------------------------- */
 
         if (
-            mask.empty() ||
-            mask.ucharAt(
-                i,
-                0
-            ) === 0
+            verified.length < 4 &&
+            typeof cv.estimateAffinePartial2D === "function"
         ) {
+            try {
+                const affineMask = new cv.Mat();
 
-            continue;
+                const affine = cv.estimateAffinePartial2D(
+                    srcMat,
+                    dstMat,
+                    affineMask,
+                    cv.RANSAC,
+                    5.0,
+                    2000,
+                    0.99,
+                    10
+                );
+
+                if (affine && !affine.empty()) {
+                    const affineVerified = [];
+
+                    for (
+                        let i = 0;
+                        i < matches.length;
+                        i++
+                    ) {
+                        if (
+                            maskValue(
+                                affineMask,
+                                i
+                            ) !== 0
+                        ) {
+                            affineVerified.push(
+                                matches[i]
+                            );
+                        }
+                    }
+
+                    if (
+                        affineVerified.length >
+                        verified.length
+                    ) {
+                        verified = affineVerified;
+                    }
+                }
+
+                if (affine && affine.delete) {
+                    affine.delete();
+                }
+
+                affineMask.delete();
+            } catch (error) {
+                // Continue with homography result.
+            }
         }
 
+        const inlierRatio =
+            matches.length > 0
+                ? verified.length / matches.length
+                : 0;
 
-        const x =
-            pointArrayA[
-                i * 2
-            ];
-
-
-        const y =
-            pointArrayA[
-                i * 2 + 1
-            ];
-
-
-        const gridX =
-            Math.min(
-                3,
-                Math.floor(
-                    x /
-                    featuresA.gray.cols *
-                    4
-                )
-            );
-
-
-        const gridY =
-            Math.min(
-                3,
-                Math.floor(
-                    y /
-                    featuresA.gray.rows *
-                    4
-                )
-            );
-
-
-        occupied.add(
-            `${gridX}-${gridY}`
-        );
-    }
-
-
-    const coverage =
-        occupied.size /
-        16 *
-        100;
-
-
-    const geometricConsistency =
-        clamp(
-            inlierRatio * 0.65 +
-            coverage * 0.35,
+        const geometricConsistency = clamp(
+            inlierRatio * 100,
             0,
             100
         );
 
+        if (mask && mask.delete) mask.delete();
+        if (H && H.delete) H.delete();
 
-    pointsA.delete();
-    pointsB.delete();
+        srcMat.delete();
+        dstMat.delete();
 
-
-    return {
-
-        verifiedMatches:
+        return {
             verified,
+            inlierRatio,
+            geometricConsistency,
+            homographyFound: verified.length >= 4
+        };
+    }
 
-        inlierRatio,
+    /* ---------------------------------------------------------
+       SPATIAL COVERAGE
+    --------------------------------------------------------- */
 
-        geometricConsistency,
+    function calculateSpatialCoverage(
+        keypoints,
+        verifiedMatches,
+        width,
+        height
+    ) {
+        if (
+            !verifiedMatches.length ||
+            !width ||
+            !height
+        ) {
+            return 0;
+        }
 
+        const occupied = new Set();
+
+        for (const match of verifiedMatches) {
+            const p = keypointXY(
+                keypoints.get(match.queryIdx)
+            );
+
+            const x = clamp(
+                Math.floor((p.x / width) * 4),
+                0,
+                3
+            );
+
+            const y = clamp(
+                Math.floor((p.y / height) * 4),
+                0,
+                3
+            );
+
+            occupied.add(`${x}:${y}`);
+        }
+
+        return clamp(
+            (occupied.size / 16) * 100,
+            0,
+            100
+        );
+    }
+
+    /* ---------------------------------------------------------
+       CORRESPONDENCE STRENGTH
+    --------------------------------------------------------- */
+
+    function calculateCorrespondenceStrength(
+        matches,
+        verifiedMatches
+    ) {
+        if (!matches.length) return 0;
+
+        const averageDistance =
+            matches.reduce(
+                (sum, match) =>
+                    sum + match.distance,
+                0
+            ) / matches.length;
+
+        const distanceScore = clamp(
+            100 - (averageDistance / 128) * 100,
+            0,
+            100
+        );
+
+        const verificationScore =
+            verifiedMatches.length /
+            matches.length *
+            100;
+
+        return clamp(
+            distanceScore * 0.45 +
+            verificationScore * 0.55,
+            0,
+            100
+        );
+    }
+
+    /* ---------------------------------------------------------
+       SCORE
+    --------------------------------------------------------- */
+
+    function calculateScore({
+        candidates,
+        verified,
         coverage,
-
-        model:
-            verified >= 4
-                ? "HOMOGRAPHY / RANSAC"
-                : "NOT ESTABLISHED",
-
-        homography,
-
-        mask
-    };
-}
-
-
-// =========================================================
-// SCORE
-// =========================================================
-
-function calculateScore(
-    candidateMatches,
-    verifiedMatches,
-    inlierRatio,
-    coverage,
-    geometry,
-    qualityA,
-    qualityB
-) {
-
-    const matchStrength =
-        clamp(
-            (
-                verifiedMatches /
-                Math.max(
-                    candidateMatches,
-                    1
-                )
-            ) * 100,
+        geometry,
+        qualityA,
+        qualityB
+    }) {
+        const verifiedCountScore = clamp(
+            (verified.length / 80) * 100,
             0,
             100
         );
 
-
-    const quantityScore =
-        clamp(
-            (
-                verifiedMatches /
-                80
-            ) * 100,
+        const candidateScore = clamp(
+            (candidates.length / 150) * 100,
             0,
             100
         );
 
+        const qualityScore =
+            (qualityA.score + qualityB.score) / 2;
 
-    const qualityScore =
-        (
-            qualityA.score +
-            qualityB.score
-        ) / 2;
+        const correspondenceStrength =
+            calculateCorrespondenceStrength(
+                candidates,
+                verified
+            );
 
-
-    const score =
-        clamp(
-
-            matchStrength * 0.30 +
-
-            quantityScore * 0.20 +
-
-            inlierRatio * 0.25 +
-
+        const score =
+            correspondenceStrength * 0.30 +
+            verifiedCountScore * 0.20 +
+            geometry * 0.25 +
             coverage * 0.10 +
+            candidateScore * 0.10 +
+            qualityScore * 0.05;
 
-            geometry * 0.10 +
+        return {
+            score: clamp(score, 0, 100),
+            correspondenceStrength
+        };
+    }
 
-            qualityScore * 0.05,
+    /* ---------------------------------------------------------
+       CLASSIFICATION
+    --------------------------------------------------------- */
 
-            0,
-            100
+    function classifyMatch({
+        score,
+        verified,
+        geometry,
+        coverage
+    }) {
+        if (
+            score >= 65 &&
+            verified >= 25 &&
+            geometry >= 55 &&
+            coverage >= 25
+        ) {
+            return {
+                decision: "HIGH",
+                status: "MATCH FOUND",
+                confidence: "HIGH"
+            };
+        }
+
+        if (
+            score >= 45 &&
+            verified >= 12 &&
+            geometry >= 35 &&
+            coverage >= 15
+        ) {
+            return {
+                decision: "MEDIUM",
+                status: "POSSIBLE MATCH",
+                confidence: "MEDIUM"
+            };
+        }
+
+        return {
+            decision: "LOW",
+            status: "NO STRONG MATCH",
+            confidence: "LOW"
+        };
+    }
+
+    /* ---------------------------------------------------------
+       INTERPRETATION
+    --------------------------------------------------------- */
+
+    function generateInterpretation(result) {
+        const {
+            classification,
+            verifiedMatches,
+            candidateMatches,
+            coverage,
+            geometry,
+            quality
+        } = result;
+
+        const score = result.score;
+
+        if (classification.decision === "HIGH") {
+            return (
+                `The correspondence analysis indicates a strong spatial ` +
+                `relationship between Image A and Image B. ` +
+                `${verifiedMatches} geometrically verified correspondences ` +
+                `were retained from ${candidateMatches} candidate matches. ` +
+                `The overall correspondence score is ${round(score, 1)}%, ` +
+                `with ${round(geometry, 1)}% geometric consistency and ` +
+                `${round(coverage, 1)}% spatial feature coverage. ` +
+                `Both images provide sufficient visual information for ` +
+                `a high-confidence correspondence assessment.`
+            );
+        }
+
+        if (classification.decision === "MEDIUM") {
+            return (
+                `The analysis identified meaningful but incomplete ` +
+                `correspondence between the supplied lunar images. ` +
+                `${verifiedMatches} candidate correspondences passed ` +
+                `geometric verification. The resulting score of ` +
+                `${round(score, 1)}% suggests that the images may depict ` +
+                `related terrain, but additional imagery or stronger ` +
+                `feature coverage would improve confidence.`
+            );
+        }
+
+        if (quality === "POOR") {
+            return (
+                `The analysis did not identify sufficient reliable ` +
+                `correspondence. Image quality or feature availability ` +
+                `may be limiting the result. Consider using images with ` +
+                `higher resolution, stronger surface texture, or less ` +
+                `illumination-related degradation.`
+            );
+        }
+
+        return (
+            `The analysis did not identify enough geometrically consistent ` +
+            `correspondence to establish a strong match. The current result ` +
+            `should be treated as a low-confidence correspondence assessment. ` +
+            `Additional imagery may be required for a reliable conclusion.`
         );
-
-
-    return score;
-}
-
-
-// =========================================================
-// CONFIDENCE
-// =========================================================
-
-function classify(
-    score,
-    verified,
-    geometry,
-    coverage
-) {
-
-    if (
-        score >= 65 &&
-        verified >= 25 &&
-        geometry >= 55 &&
-        coverage >= 25
-    ) {
-
-        return {
-            confidence:
-                "HIGH",
-
-            decision:
-                "STRONG CORRESPONDENCE",
-
-            matchFound:
-                true
-        };
     }
 
+    /* ---------------------------------------------------------
+       CORRESPONDENCE VISUALIZATION
+    --------------------------------------------------------- */
 
-    if (
-        score >= 45 &&
-        verified >= 12 &&
-        geometry >= 35 &&
-        coverage >= 15
+    function createCorrespondenceVisualization(
+        matA,
+        matB,
+        keypointsA,
+        keypointsB,
+        verifiedMatches
     ) {
+        const widthA = matA.cols;
+        const heightA = matA.rows;
 
-        return {
-            confidence:
-                "MEDIUM",
+        const widthB = matB.cols;
+        const heightB = matB.rows;
 
-            decision:
-                "MODERATE CORRESPONDENCE",
-
-            matchFound:
-                true
-        };
-    }
-
-
-    return {
-
-        confidence:
-            "LOW",
-
-        decision:
-            "LIMITED CORRESPONDENCE",
-
-        matchFound:
-            false
-    };
-}
-
-
-// =========================================================
-// DRAW CORRESPONDENCE MAP
-// =========================================================
-
-function createCorrespondenceMap(
-    imageA,
-    imageB,
-    featuresA,
-    featuresB,
-    matches,
-    geometry
-) {
-
-    const widthA =
-        imageA.cols;
-
-
-    const heightA =
-        imageA.rows;
-
-
-    const widthB =
-        imageB.cols;
-
-
-    const heightB =
-        imageB.rows;
-
-
-    const gap =
-        40;
-
-
-    const outputWidth =
-        widthA +
-        widthB +
-        gap;
-
-
-    const outputHeight =
-        Math.max(
+        const height = Math.max(
             heightA,
             heightB
         );
 
+        const width =
+            widthA + widthB;
 
-    const output =
-        new cv.Mat(
-            outputHeight,
-            outputWidth,
-            cv.CV_8UC4,
-            new cv.Scalar(
-                12,
-                12,
-                12,
-                255
-            )
+        const canvas = document.createElement("canvas");
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext("2d");
+
+        ctx.fillStyle = "#05070c";
+        ctx.fillRect(
+            0,
+            0,
+            width,
+            height
         );
 
+        const canvasA = document.createElement("canvas");
+        canvasA.width = widthA;
+        canvasA.height = heightA;
 
-    const roiA =
-        output.roi(
-            new cv.Rect(
-                0,
-                0,
-                widthA,
-                heightA
-            )
+        const canvasB = document.createElement("canvas");
+        canvasB.width = widthB;
+        canvasB.height = heightB;
+
+        cv.imshow(canvasA, matA);
+        cv.imshow(canvasB, matB);
+
+        ctx.drawImage(
+            canvasA,
+            0,
+            0
         );
 
-
-    const roiB =
-        output.roi(
-            new cv.Rect(
-                widthA + gap,
-                0,
-                widthB,
-                heightB
-            )
+        ctx.drawImage(
+            canvasB,
+            widthA,
+            0
         );
 
-
-    imageA.copyTo(
-        roiA
-    );
-
-
-    imageB.copyTo(
-        roiB
-    );
-
-
-    roiA.delete();
-    roiB.delete();
-
-
-    const verifiedIndices =
-        [];
-
-
-    if (
-        geometry.mask &&
-        !geometry.mask.empty()
-    ) {
-
-        for (
-            let i = 0;
-            i < matches.length;
-            i++
-        ) {
-
-            if (
-                geometry.mask.ucharAt(
-                    i,
-                    0
-                ) > 0
-            ) {
-
-                verifiedIndices.push(
-                    i
+        const selected =
+            verifiedMatches
+                .slice()
+                .sort(
+                    (a, b) =>
+                        a.distance -
+                        b.distance
+                )
+                .slice(
+                    0,
+                    MAX_VISUAL_MATCHES
                 );
-            }
+
+        ctx.lineWidth = 1;
+
+        for (const match of selected) {
+            const pA = keypointXY(
+                keypointsA.get(match.queryIdx)
+            );
+
+            const pB = keypointXY(
+                keypointsB.get(match.trainIdx)
+            );
+
+            const hue =
+                (match.queryIdx * 37) % 360;
+
+            ctx.strokeStyle =
+                `hsl(${hue}, 90%, 68%)`;
+
+            ctx.fillStyle =
+                `hsl(${hue}, 90%, 75%)`;
+
+            ctx.beginPath();
+
+            ctx.moveTo(
+                pA.x,
+                pA.y
+            );
+
+            ctx.lineTo(
+                widthA + pB.x,
+                pB.y
+            );
+
+            ctx.stroke();
+
+            ctx.beginPath();
+
+            ctx.arc(
+                pA.x,
+                pA.y,
+                3,
+                0,
+                Math.PI * 2
+            );
+
+            ctx.fill();
+
+            ctx.beginPath();
+
+            ctx.arc(
+                widthA + pB.x,
+                pB.y,
+                3,
+                0,
+                Math.PI * 2
+            );
+
+            ctx.fill();
         }
-    }
 
-
-    // Limit drawn lines for performance
-    const drawLimit =
-        Math.min(
-            verifiedIndices.length,
-            80
-        );
-
-
-    for (
-        let j = 0;
-        j < drawLimit;
-        j++
-    ) {
-
-        const index =
-            verifiedIndices[j];
-
-
-        const match =
-            matches[index];
-
-
-        const kpA =
-            featuresA.keypoints.get(
-                match.queryIdx
-            );
-
-
-        const kpB =
-            featuresB.keypoints.get(
-                match.trainIdx
-            );
-
-
-        const ptA =
-            new cv.Point(
-                Math.round(
-                    kpA.pt.x
-                ),
-                Math.round(
-                    kpA.pt.y
-                )
-            );
-
-
-        const ptB =
-            new cv.Point(
-                Math.round(
-                    kpB.pt.x +
-                    widthA +
-                    gap
-                ),
-                Math.round(
-                    kpB.pt.y
-                )
-            );
-
-
-        cv.line(
-            output,
-            ptA,
-            ptB,
-            new cv.Scalar(
-                0,
-                255,
-                120,
-                255
-            ),
-            1
-        );
-
-
-        cv.circle(
-            output,
-            ptA,
-            4,
-            new cv.Scalar(
-                0,
-                255,
-                120,
-                255
-            ),
-            1
-        );
-
-
-        cv.circle(
-            output,
-            ptB,
-            4,
-            new cv.Scalar(
-                0,
-                255,
-                120,
-                255
-            ),
-            1
-        );
-    }
-
-
-    const canvas =
-        document.createElement(
-            "canvas"
-        );
-
-
-    canvas.width =
-        output.cols;
-
-    canvas.height =
-        output.rows;
-
-
-    cv.imshow(
-        canvas,
-        output
-    );
-
-
-    const dataURL =
-        canvas.toDataURL(
+        return canvas.toDataURL(
             "image/jpeg",
-            0.88
+            0.92
         );
-
-
-    output.delete();
-
-
-    return dataURL;
-}
-
-
-// =========================================================
-// DISPLAY RESULTS
-// =========================================================
-
-function displayResults(
-    data
-) {
-
-    lastAnalysis =
-        data;
-
-
-    setText(
-        "status",
-        data.decision
-    );
-
-
-    setText(
-        "score",
-        percent(
-            data.match_percentage
-        )
-    );
-
-
-    setText(
-        "features",
-        `${numberFormat(data.verified_matches)} / ${numberFormat(data.candidate_matches)}`
-    );
-
-
-    setText(
-        "confidence",
-        data.confidence
-    );
-
-
-    setText(
-        "quality",
-        data.overall_quality
-    );
-
-
-    setText(
-        "time",
-        seconds(
-            data.processing_time
-        )
-    );
-
-
-    // IMAGE A
-    setText(
-        "resolutionA",
-        data.image_quality_a.resolution
-    );
-
-
-    setText(
-        "keypointsA",
-        numberFormat(
-            data.feature_count_a
-        )
-    );
-
-
-    setText(
-        "contrastA",
-        data.image_quality_a.contrast.toFixed(1)
-    );
-
-
-    setText(
-        "sharpnessA",
-        data.image_quality_a.sharpness.toFixed(1)
-    );
-
-
-    setText(
-        "qualityScoreA",
-        data.image_quality_a.score.toFixed(1)
-    );
-
-
-    // IMAGE B
-    setText(
-        "resolutionB",
-        data.image_quality_b.resolution
-    );
-
-
-    setText(
-        "keypointsB",
-        numberFormat(
-            data.feature_count_b
-        )
-    );
-
-
-    setText(
-        "contrastB",
-        data.image_quality_b.contrast.toFixed(1)
-    );
-
-
-    setText(
-        "sharpnessB",
-        data.image_quality_b.sharpness.toFixed(1)
-    );
-
-
-    setText(
-        "qualityScoreB",
-        data.image_quality_b.score.toFixed(1)
-    );
-
-
-    // MATCHES
-    setText(
-        "rawMatches",
-        numberFormat(
-            data.raw_matches
-        )
-    );
-
-
-    setText(
-        "candidateMatches",
-        numberFormat(
-            data.candidate_matches
-        )
-    );
-
-
-    setText(
-        "verifiedMatches",
-        numberFormat(
-            data.verified_matches
-        )
-    );
-
-
-    // COVERAGE
-    setText(
-        "featureCoverage",
-        percent(
-            data.feature_coverage
-        )
-    );
-
-
-    setText(
-        "correspondenceStrength",
-        percent(
-            data.correspondence_strength
-        )
-    );
-
-
-    // GEOMETRY
-    setText(
-        "inlierRatio",
-        percent(
-            data.inlier_ratio
-        )
-    );
-
-
-    setText(
-        "geometricConsistency",
-        percent(
-            data.geometric_consistency
-        )
-    );
-
-
-    setText(
-        "homographyStatus",
-        data.geometry_model
-    );
-
-
-    setText(
-        "verificationStatus",
-        data.verification_status
-    );
-
-
-    // VISUALIZATION
-    if (
-        data.visualization &&
-        correspondenceMap
-    ) {
-
-        correspondenceMap.src =
-            data.visualization;
-
-
-        correspondenceMap.style.display =
-            "block";
-
-
-        if (visualPlaceholder) {
-
-            visualPlaceholder.style.display =
-                "none";
-        }
     }
 
-
-    if (visualNote) {
-
-        visualNote.textContent =
-            `● ${numberFormat(data.verified_matches)} verified ORB correspondences · ${data.geometry_model}`;
-    }
-
-
-    const visualEngine =
-        document.getElementById(
-            "visualEngine"
-        );
-
-
-    if (visualEngine) {
-
-        visualEngine.textContent =
-            "BROWSER ORB + RANSAC";
-    }
-
-
-    generateInterpretation(
-        data
-    );
-
-
-    pipelineComplete();
-
-
-    // Report button remains available as a data export.
-    if (downloadReportBtn) {
-
-        downloadReportBtn.disabled =
-            false;
-    }
-
-
-    console.log(
-        "LUNARMATCH BROWSER RESULT:",
-        data
-    );
-}
-
-
-// =========================================================
-// INTERPRETATION
-// =========================================================
-
-function generateInterpretation(
-    data
-) {
-
-    let assessment;
-
-
-    if (
-        data.confidence ===
-        "HIGH"
-    ) {
-
-        assessment =
-            "The browser correspondence engine detected strong supporting visual evidence with multiple geometrically consistent relationships.";
-
-    } else if (
-        data.confidence ===
-        "MEDIUM"
-    ) {
-
-        assessment =
-            "The browser correspondence engine detected meaningful visual correspondence, but the available geometric evidence does not support a high-confidence classification.";
-
-    } else {
-
-        assessment =
-            "The engine detected limited correspondence evidence. The result should be treated cautiously when illumination, scale, viewpoint, terrain appearance, or image quality differ significantly.";
-    }
-
-
-    let scoreText;
-
-
-    if (
-        data.match_percentage >=
-        70
-    ) {
-
-        scoreText =
-            "The overall correspondence evidence is strong.";
-
-    } else if (
-        data.match_percentage >=
-        40
-    ) {
-
-        scoreText =
-            "The overall correspondence evidence is moderate.";
-
-    } else if (
-        data.match_percentage >=
-        20
-    ) {
-
-        scoreText =
-            "The overall correspondence evidence is limited.";
-
-    } else {
-
-        scoreText =
-            "The overall correspondence evidence is low.";
-    }
-
-
-    const text =
-
-        `${assessment} ` +
-
-        `${scoreText} ` +
-
-        `The analysis produced ${numberFormat(data.candidate_matches)} candidate correspondences, of which ${numberFormat(data.verified_matches)} survived robust geometric verification using ${data.geometry_model}. ` +
-
-        `The final correspondence score is ${percent(data.match_percentage)} with ${data.confidence.toLowerCase()} confidence. ` +
-
-        `This score represents measured image-correspondence evidence, not a probability that the two images depict the same geographic location.`;
-
-
-    setText(
-        "interpretation",
-        text
-    );
-}
-
-
-// =========================================================
-// RUN BROWSER ANALYSIS
-// =========================================================
-
-async function compareImages() {
-
-    if (
-        !fileA ||
-        !fileB
-    ) {
-
-        console.error(
-            "LUNARMATCH: input elements not found."
-        );
-
-        return;
-    }
-
-
-    const imageFileA =
-        fileA.files[0];
-
-
-    const imageFileB =
-        fileB.files[0];
-
-
-    if (
-        !imageFileA ||
-        !imageFileB
-    ) {
-
-        alert(
-            "Please upload both Image A and Image B before starting the analysis."
-        );
-
-        return;
-    }
-
-
-    if (
-        !imageFileA.type.startsWith("image/") ||
-        !imageFileB.type.startsWith("image/")
-    ) {
-
-        alert(
-            "Both files must be valid image files."
-        );
-
-        return;
-    }
-
-
-    if (compareBtn) {
-
-        compareBtn.disabled =
-            true;
-
-        compareBtn.innerHTML =
-            `<span>ANALYZING LUNAR DATA...</span><b>◌</b>`;
-    }
-
-
-    setText(
-        "status",
-        "ANALYSIS IN PROGRESS"
-    );
-
-
-    setText(
-        "score",
-        "···"
-    );
-
-
-    setText(
-        "features",
-        "Processing"
-    );
-
-
-    setText(
-        "confidence",
-        "Processing"
-    );
-
-
-    setText(
-        "quality",
-        "Processing"
-    );
-
-
-    setText(
-        "time",
-        "Processing"
-    );
-
-
-    if (downloadReportBtn) {
-
-        downloadReportBtn.disabled =
-            true;
-    }
-
-
-    if (correspondenceMap) {
-
-        correspondenceMap.src = "";
-
-        correspondenceMap.style.display =
-            "none";
-    }
-
-
-    if (visualPlaceholder) {
-
-        visualPlaceholder.style.display =
-            "block";
-    }
-
-
-    if (visualNote) {
-
-        visualNote.textContent =
-            "● Running browser-side feature extraction and geometric verification...";
-    }
-
-
-    pipelineRunning();
-
-
-    const startTime =
-        performance.now();
-
-
-    let matA =
-        null;
-
-    let matB =
-        null;
-
-    let featuresA =
-        null;
-
-    let featuresB =
-        null;
-
-    let geometry =
-        null;
-
-
-    try {
-
-        // -------------------------------------------------
-        // LOAD OPENCV
-        // -------------------------------------------------
-
+    /* ---------------------------------------------------------
+       DISPLAY RESULTS
+    --------------------------------------------------------- */
+
+    function displayResults(result) {
         setText(
             "status",
-            "LOADING ANALYSIS ENGINE"
+            result.classification.status
         );
-
-
-        await loadOpenCV();
-
-
-        // -------------------------------------------------
-        // READ IMAGES
-        // -------------------------------------------------
-
-        setText(
-            "status",
-            "READING LUNAR IMAGES"
-        );
-
-
-        matA =
-            await fileToMat(
-                imageFileA
-            );
-
-
-        matB =
-            await fileToMat(
-                imageFileB
-            );
-
-
-        pipeline(
-            "stageAcquire",
-            "complete"
-        );
-
-
-        // -------------------------------------------------
-        // QUALITY
-        // -------------------------------------------------
-
-        setText(
-            "status",
-            "PREPROCESSING IMAGES"
-        );
-
-
-        const qualityA =
-            calculateImageQuality(
-                matA
-            );
-
-
-        const qualityB =
-            calculateImageQuality(
-                matB
-            );
-
-
-        pipeline(
-            "stagePreprocess",
-            "complete"
-        );
-
-
-        // -------------------------------------------------
-        // FEATURES
-        // -------------------------------------------------
-
-        setText(
-            "status",
-            "EXTRACTING VISUAL FEATURES"
-        );
-
-
-        pipeline(
-            "stageExtract",
-            "active"
-        );
-
-
-        featuresA =
-            extractFeatures(
-                matA
-            );
-
-
-        featuresB =
-            extractFeatures(
-                matB
-            );
-
-
-        pipeline(
-            "stageExtract",
-            "complete"
-        );
-
-
-        // -------------------------------------------------
-        // MATCH
-        // -------------------------------------------------
-
-        setText(
-            "status",
-            "MATCHING CORRESPONDENCES"
-        );
-
-
-        pipeline(
-            "stageMatch",
-            "active"
-        );
-
-
-        const matches =
-            matchFeatures(
-                featuresA.descriptors,
-                featuresB.descriptors
-            );
-
-
-        pipeline(
-            "stageMatch",
-            "complete"
-        );
-
-
-        // -------------------------------------------------
-        // GEOMETRY
-        // -------------------------------------------------
-
-        setText(
-            "status",
-            "VERIFYING GEOMETRY"
-        );
-
-
-        pipeline(
-            "stageVerify",
-            "active"
-        );
-
-
-        geometry =
-            verifyGeometry(
-                featuresA,
-                featuresB,
-                matches
-            );
-
-
-        pipeline(
-            "stageVerify",
-            "complete"
-        );
-
-
-        // -------------------------------------------------
-        // SCORE
-        // -------------------------------------------------
-
-        setText(
-            "status",
-            "CALCULATING CORRESPONDENCE SCORE"
-        );
-
-
-        pipeline(
-            "stageScore",
-            "active"
-        );
-
-
-        const score =
-            calculateScore(
-
-                matches.length,
-
-                geometry.verifiedMatches,
-
-                geometry.inlierRatio,
-
-                geometry.coverage,
-
-                geometry.geometricConsistency,
-
-                qualityA,
-
-                qualityB
-            );
-
-
-        const classification =
-            classify(
-
-                score,
-
-                geometry.verifiedMatches,
-
-                geometry.geometricConsistency,
-
-                geometry.coverage
-            );
-
-
-        // -------------------------------------------------
-        // VISUALIZATION
-        // -------------------------------------------------
-
-        let visualization =
-            null;
-
-
-        try {
-
-            visualization =
-                createCorrespondenceMap(
-
-                    matA,
-
-                    matB,
-
-                    featuresA,
-
-                    featuresB,
-
-                    matches,
-
-                    geometry
-                );
-
-        } catch (visualError) {
-
-            console.warn(
-                "Visualization warning:",
-                visualError
-            );
-        }
-
-
-        pipeline(
-            "stageScore",
-            "complete"
-        );
-
-
-        // -------------------------------------------------
-        // FINAL RESULT
-        // -------------------------------------------------
-
-        const processingTime =
-            (
-                performance.now() -
-                startTime
-            ) / 1000;
-
-
-        const overallQuality =
-            (
-                qualityA.score +
-                qualityB.score
-            ) / 2;
-
-
-        const result = {
-
-            success:
-                true,
-
-            version:
-                "LUNARMATCH BROWSER 1.0",
-
-            engine:
-                "BROWSER ORB + RANSAC",
-
-            method:
-                "ORB + BFMatcher + Homography RANSAC",
-
-            decision:
-                classification.decision,
-
-            confidence:
-                classification.confidence,
-
-            match_found:
-                classification.matchFound,
-
-            match_percentage:
-                score,
-
-            correspondence_score:
-                score,
-
-            score,
-
-            raw_matches:
-                matches.length,
-
-            candidate_matches:
-                matches.length,
-
-            verified_matches:
-                geometry.verifiedMatches,
-
-            feature_count_a:
-                featuresA.count,
-
-            feature_count_b:
-                featuresB.count,
-
-            feature_coverage:
-                geometry.coverage,
-
-            spatial_coverage:
-                geometry.coverage,
-
-            correspondence_strength:
-                geometry.inlierRatio,
-
-            inlier_ratio:
-                geometry.inlierRatio,
-
-            geometric_consistency:
-                geometry.geometricConsistency,
-
-            geometry_score:
-                geometry.geometricConsistency,
-
-            geometry_model:
-                geometry.model,
-
-            verification_status:
-                geometry.verifiedMatches >= 4
-                    ? "CORRESPONDENCES VERIFIED"
-                    : "INSUFFICIENT VERIFIED CORRESPONDENCES",
-
-            image_quality_a:
-                qualityA,
-
-            image_quality_b:
-                qualityB,
-
-            overall_quality:
-                overallQuality >= 75
-                    ? "EXCELLENT"
-                    : overallQuality >= 55
-                        ? "GOOD"
-                        : overallQuality >= 35
-                            ? "FAIR"
-                            : "LIMITED",
-
-            visualization,
-
-            processing_time:
-                processingTime
-        };
-
-
-        pipeline(
-            "stageReport",
-            "complete"
-        );
-
-
-        displayResults(
-            result
-        );
-
-
-    } catch (error) {
-
-        console.error(
-            "LUNARMATCH BROWSER ERROR:",
-            error
-        );
-
-
-        setText(
-            "status",
-            "ANALYSIS FAILED"
-        );
-
 
         setText(
             "score",
-            "—"
+            `${round(result.score, 1)}%`
         );
-
 
         setText(
             "features",
-            "—"
+            result.verifiedMatches
         );
-
 
         setText(
             "confidence",
-            "—"
+            result.classification.confidence
         );
-
 
         setText(
             "quality",
-            "—"
+            result.quality
         );
-
 
         setText(
             "time",
-            "—"
+            formatMs(result.processingTime)
         );
 
+        /* Image A */
 
-        pipelineFailed();
-
-
-        if (correspondenceMap) {
-
-            correspondenceMap.src =
-                "";
-
-            correspondenceMap.style.display =
-                "none";
-        }
-
-
-        if (visualPlaceholder) {
-
-            visualPlaceholder.style.display =
-                "block";
-        }
-
-
-        if (visualNote) {
-
-            visualNote.textContent =
-                "● Browser-side analysis could not be completed.";
-        }
-
-
-        if (downloadReportBtn) {
-
-            downloadReportBtn.disabled =
-                true;
-        }
-
-
-        alert(
-            error.message ||
-            "Unable to complete image analysis."
+        setText(
+            "resolutionA",
+            `${result.imageA.width} × ${result.imageA.height}`
         );
 
-    } finally {
+        setText(
+            "keypointsA",
+            result.imageA.keypoints
+        );
 
-        // -------------------------------------------------
-        // CLEAN OPENCV MEMORY
-        // -------------------------------------------------
+        setText(
+            "contrastA",
+            round(result.imageA.contrast, 2)
+        );
+
+        setText(
+            "sharpnessA",
+            round(result.imageA.sharpness, 2)
+        );
+
+        setText(
+            "qualityScoreA",
+            `${round(result.imageA.qualityScore, 1)}%`
+        );
+
+        /* Image B */
+
+        setText(
+            "resolutionB",
+            `${result.imageB.width} × ${result.imageB.height}`
+        );
+
+        setText(
+            "keypointsB",
+            result.imageB.keypoints
+        );
+
+        setText(
+            "contrastB",
+            round(result.imageB.contrast, 2)
+        );
+
+        setText(
+            "sharpnessB",
+            round(result.imageB.sharpness, 2)
+        );
+
+        setText(
+            "qualityScoreB",
+            `${round(result.imageB.qualityScore, 1)}%`
+        );
+
+        /* Correspondence */
+
+        setText(
+            "rawMatches",
+            result.rawMatches
+        );
+
+        setText(
+            "candidateMatches",
+            result.candidateMatches
+        );
+
+        setText(
+            "verifiedMatches",
+            result.verifiedMatches
+        );
+
+        setText(
+            "featureCoverage",
+            `${round(result.coverage, 1)}%`
+        );
+
+        setText(
+            "correspondenceStrength",
+            `${round(
+                result.correspondenceStrength,
+                1
+            )}%`
+        );
+
+        /* Geometry */
+
+        setText(
+            "inlierRatio",
+            `${round(
+                result.inlierRatio * 100,
+                1
+            )}%`
+        );
+
+        setText(
+            "geometricConsistency",
+            `${round(
+                result.geometricConsistency,
+                1
+            )}%`
+        );
+
+        setText(
+            "homographyStatus",
+            result.homographyStatus
+        );
+
+        setText(
+            "verificationStatus",
+            result.verificationStatus
+        );
+
+        setText(
+            "interpretation",
+            result.interpretation
+        );
+
+        /* Visualization */
+
+        const visual = $("correspondenceMap");
+
+        if (visual && result.visualization) {
+            visual.src = result.visualization;
+            visual.style.display = "block";
+        }
+
+        show("visualPlaceholder", false);
+
+        const note = $("visualNote");
+
+        if (note) {
+            note.textContent =
+                `${Math.min(
+                    result.verifiedMatches,
+                    MAX_VISUAL_MATCHES
+                )} verified correspondences visualized.`;
+        }
+
+        setDisabled(
+            "downloadReportBtn",
+            false
+        );
+    }
+
+    /* ---------------------------------------------------------
+       MAIN ANALYSIS
+    --------------------------------------------------------- */
+
+    async function analyzeImages() {
+        if (!imageAFile || !imageBFile) {
+            setText(
+                "status",
+                "UPLOAD BOTH IMAGES"
+            );
+
+            setText(
+                "interpretation",
+                "Please provide Image A and Image B before starting analysis."
+            );
+
+            return;
+        }
+
+        const startTime = performance.now();
+
+        let matA = null;
+        let matB = null;
+
+        let grayA = null;
+        let grayB = null;
+
+        let featuresA = null;
+        let featuresB = null;
 
         try {
+            setDisabled("compareBtn", true);
+            setDisabled("downloadReportBtn", true);
 
-            if (geometry) {
+            resetPipeline();
 
+            /* ACQUIRE */
+
+            pipelineActive(0);
+
+            setText(
+                "status",
+                "ACQUIRING"
+            );
+
+            await sleep(80);
+
+            await waitForOpenCV();
+
+            const loadedA =
+                await imageToMat(imageAFile);
+
+            const loadedB =
+                await imageToMat(imageBFile);
+
+            matA = loadedA.mat;
+            matB = loadedB.mat;
+
+            /* PREPROCESS */
+
+            pipelineActive(1);
+
+            setText(
+                "status",
+                "PREPROCESSING"
+            );
+
+            await sleep(80);
+
+            const qualityA =
+                calculateImageQuality(matA);
+
+            const qualityB =
+                calculateImageQuality(matB);
+
+            /* EXTRACT */
+
+            pipelineActive(2);
+
+            setText(
+                "status",
+                "EXTRACTING FEATURES"
+            );
+
+            await sleep(100);
+
+            featuresA =
+                extractFeatures(matA);
+
+            featuresB =
+                extractFeatures(matB);
+
+            /* MATCH */
+
+            pipelineActive(3);
+
+            setText(
+                "status",
+                "MATCHING FEATURES"
+            );
+
+            await sleep(100);
+
+            const matchResult =
+                matchDescriptors(
+                    featuresA.descriptors,
+                    featuresB.descriptors
+                );
+
+            const candidates =
+                deduplicateMatches(
+                    matchResult.candidates
+                );
+
+            /* VERIFY */
+
+            pipelineActive(4);
+
+            setText(
+                "status",
+                "VERIFYING GEOMETRY"
+            );
+
+            await sleep(100);
+
+            const geometry =
+                verifyGeometry(
+                    featuresA.keypoints,
+                    featuresB.keypoints,
+                    candidates
+                );
+
+            const coverage =
+                calculateSpatialCoverage(
+                    featuresA.keypoints,
+                    geometry.verified,
+                    matA.cols,
+                    matA.rows
+                );
+
+            /* SCORE */
+
+            pipelineActive(5);
+
+            setText(
+                "status",
+                "CALCULATING SCORE"
+            );
+
+            await sleep(100);
+
+            const scoreResult =
+                calculateScore({
+                    candidates,
+                    verified:
+                        geometry.verified,
+                    coverage,
+                    geometry:
+                        geometry.geometricConsistency,
+                    qualityA,
+                    qualityB
+                });
+
+            const classification =
+                classifyMatch({
+                    score: scoreResult.score,
+                    verified:
+                        geometry.verified.length,
+                    geometry:
+                        geometry.geometricConsistency,
+                    coverage
+                });
+
+            /* VISUALIZATION */
+
+            const visualization =
+                createCorrespondenceVisualization(
+                    matA,
+                    matB,
+                    featuresA.keypoints,
+                    featuresB.keypoints,
+                    geometry.verified
+                );
+
+            /* REPORT */
+
+            pipelineActive(6);
+
+            setText(
+                "status",
+                "GENERATING RESULTS"
+            );
+
+            await sleep(120);
+
+            const processingTime =
+                performance.now() -
+                startTime;
+
+            const quality =
+                qualityA.label === "POOR" ||
+                qualityB.label === "POOR"
+                    ? "POOR"
+                    : qualityA.label === "FAIR" ||
+                      qualityB.label === "FAIR"
+                        ? "FAIR"
+                        : qualityA.label === "GOOD" ||
+                          qualityB.label === "GOOD"
+                            ? "GOOD"
+                            : "EXCELLENT";
+
+            const result = {
+                success: true,
+
+                engine:
+                    "Browser OpenCV.js ORB + BFMatcher + RANSAC",
+
+                version:
+                    "LUNARMATCH 5.3 Browser Engine",
+
+                score:
+                    scoreResult.score,
+
+                classification,
+
+                quality,
+
+                processingTime,
+
+                rawMatches:
+                    matchResult.rawMatches,
+
+                candidateMatches:
+                    candidates.length,
+
+                verifiedMatches:
+                    geometry.verified.length,
+
+                coverage,
+
+                correspondenceStrength:
+                    scoreResult.correspondenceStrength,
+
+                inlierRatio:
+                    geometry.inlierRatio,
+
+                geometricConsistency:
+                    geometry.geometricConsistency,
+
+                homographyStatus:
+                    geometry.homographyFound
+                        ? "DETECTED"
+                        : "NOT ESTABLISHED",
+
+                verificationStatus:
+                    geometry.verified.length >= 4
+                        ? "VERIFIED"
+                        : "INSUFFICIENT",
+
+                imageA: {
+                    width: loadedA.width,
+                    height: loadedA.height,
+                    originalWidth:
+                        loadedA.originalWidth,
+                    originalHeight:
+                        loadedA.originalHeight,
+                    keypoints:
+                        featuresA.count,
+                    contrast:
+                        qualityA.contrast,
+                    sharpness:
+                        qualityA.sharpness,
+                    qualityScore:
+                        qualityA.score,
+                    qualityLabel:
+                        qualityA.label
+                },
+
+                imageB: {
+                    width: loadedB.width,
+                    height: loadedB.height,
+                    originalWidth:
+                        loadedB.originalWidth,
+                    originalHeight:
+                        loadedB.originalHeight,
+                    keypoints:
+                        featuresB.count,
+                    contrast:
+                        qualityB.contrast,
+                    sharpness:
+                        qualityB.sharpness,
+                    qualityScore:
+                        qualityB.score,
+                    qualityLabel:
+                        qualityB.label
+                },
+
+                visualization,
+
+                interpretation: ""
+            };
+
+            result.interpretation =
+                generateInterpretation(result);
+
+            lastAnalysis = result;
+
+            displayResults(result);
+
+            pipelineComplete();
+
+            setText(
+                "status",
+                classification.status
+            );
+
+        } catch (error) {
+            console.error(
+                "LUNARMATCH analysis error:",
+                error
+            );
+
+            pipelineError(5);
+
+            setText(
+                "status",
+                "ANALYSIS ERROR"
+            );
+
+            setText(
+                "interpretation",
+                `Analysis could not be completed: ${
+                    error.message ||
+                    "Unknown processing error."
+                }`
+            );
+
+            show(
+                "visualPlaceholder",
+                true
+            );
+
+        } finally {
+            try {
                 if (
-                    geometry.homography &&
-                    typeof geometry.homography.delete ===
-                    "function"
+                    featuresA &&
+                    featuresA.keypoints
                 ) {
-
-                    geometry.homography.delete();
-                }
-
-
-                if (
-                    geometry.mask &&
-                    typeof geometry.mask.delete ===
-                    "function"
-                ) {
-
-                    geometry.mask.delete();
-                }
-            }
-
-
-            if (featuresA) {
-
-                if (
-                    featuresA.gray &&
-                    typeof featuresA.gray.delete ===
-                    "function"
-                ) {
-
-                    featuresA.gray.delete();
-                }
-
-
-                if (
-                    featuresA.clahe &&
-                    typeof featuresA.clahe.delete ===
-                    "function"
-                ) {
-
-                    featuresA.clahe.delete();
-                }
-
-
-                if (
-                    featuresA.keypoints &&
-                    typeof featuresA.keypoints.delete ===
-                    "function"
-                ) {
-
                     featuresA.keypoints.delete();
                 }
 
-
                 if (
-                    featuresA.descriptors &&
-                    typeof featuresA.descriptors.delete ===
-                    "function"
+                    featuresA &&
+                    featuresA.descriptors
                 ) {
-
                     featuresA.descriptors.delete();
                 }
-            }
-
-
-            if (featuresB) {
 
                 if (
-                    featuresB.gray &&
-                    typeof featuresB.gray.delete ===
-                    "function"
+                    featuresB &&
+                    featuresB.keypoints
                 ) {
-
-                    featuresB.gray.delete();
-                }
-
-
-                if (
-                    featuresB.clahe &&
-                    typeof featuresB.clahe.delete ===
-                    "function"
-                ) {
-
-                    featuresB.clahe.delete();
-                }
-
-
-                if (
-                    featuresB.keypoints &&
-                    typeof featuresB.keypoints.delete ===
-                    "function"
-                ) {
-
                     featuresB.keypoints.delete();
                 }
 
-
                 if (
-                    featuresB.descriptors &&
-                    typeof featuresB.descriptors.delete ===
-                    "function"
+                    featuresB &&
+                    featuresB.descriptors
                 ) {
-
                     featuresB.descriptors.delete();
                 }
+
+                if (grayA) grayA.delete();
+                if (grayB) grayB.delete();
+
+                if (matA) matA.delete();
+                if (matB) matB.delete();
+
+            } catch (cleanupError) {
+                console.warn(
+                    "OpenCV cleanup warning:",
+                    cleanupError
+                );
             }
 
+            setDisabled(
+                "compareBtn",
+                false
+            );
+        }
+    }
 
-            if (matA) {
+    /* ---------------------------------------------------------
+       PDF ENGINE
+    --------------------------------------------------------- */
 
-                matA.delete();
-            }
-
-
-            if (matB) {
-
-                matB.delete();
-            }
-
-        } catch (cleanupError) {
-
-            console.warn(
-                "OpenCV cleanup warning:",
-                cleanupError
+    function loadJsPDF() {
+        if (
+            window.jspdf &&
+            window.jspdf.jsPDF
+        ) {
+            return Promise.resolve(
+                window.jspdf.jsPDF
             );
         }
 
-
-        if (compareBtn) {
-
-            compareBtn.disabled =
-                false;
-
-            compareBtn.innerHTML =
-                `<span>RUN CORRESPONDENCE ENGINE</span><b>→</b>`;
+        if (pdfReadyPromise) {
+            return pdfReadyPromise;
         }
-    }
-}
 
+        pdfReadyPromise = new Promise(
+            (resolve, reject) => {
+                const script =
+                    document.createElement("script");
 
-if (compareBtn) {
+                script.src =
+                    "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
 
-    compareBtn.addEventListener(
-        "click",
-        compareImages
-    );
-}
+                script.onload = () => {
+                    if (
+                        window.jspdf &&
+                        window.jspdf.jsPDF
+                    ) {
+                        resolve(
+                            window.jspdf.jsPDF
+                        );
+                    } else {
+                        reject(
+                            new Error(
+                                "PDF library initialized incorrectly."
+                            )
+                        );
+                    }
+                };
 
+                script.onerror = () => {
+                    reject(
+                        new Error(
+                            "Unable to load PDF generator."
+                        )
+                    );
+                };
 
-// =========================================================
-// REPORT / EXPORT
-// =========================================================
-
-async function downloadReport() {
-
-    if (!lastAnalysis) {
-
-        alert(
-            "Please run the correspondence analysis first."
+                document.head.appendChild(script);
+            }
         );
 
-        return;
+        return pdfReadyPromise;
     }
 
+    /* ---------------------------------------------------------
+       PDF REPORT
+    --------------------------------------------------------- */
 
-    /*
-       The old /api/report endpoint depends on the
-       heavy Python backend.
+    async function downloadReport() {
+        if (!lastAnalysis) {
+            alert(
+                "Please complete an analysis before generating a report."
+            );
 
-       For the free browser deployment we instead
-       export the completed analysis as a local JSON
-       report. No server required.
-    */
+            return;
+        }
 
-    try {
+        const button =
+            $("downloadReportBtn");
 
-        const report = {
+        if (button) {
+            button.disabled = true;
+            button.textContent =
+                "GENERATING REPORT...";
+        }
 
-            project:
+        try {
+            const jsPDF =
+                await loadJsPDF();
+
+            const doc =
+                new jsPDF({
+                    orientation: "portrait",
+                    unit: "mm",
+                    format: "a4"
+                });
+
+            const result =
+                lastAnalysis;
+
+            const margin = 16;
+
+            let y = 18;
+
+            doc.setFont(
+                "helvetica",
+                "bold"
+            );
+
+            doc.setFontSize(22);
+
+            doc.text(
                 "LUNARMATCH",
+                margin,
+                y
+            );
 
-            title:
-                "LUNARMATCH Lunar Image Correspondence Report",
+            y += 8;
 
-            generated:
-                new Date().toISOString(),
+            doc.setFontSize(10);
 
-            engine:
-                lastAnalysis.engine,
+            doc.setFont(
+                "helvetica",
+                "normal"
+            );
 
-            analysis:
-                lastAnalysis
-        };
+            doc.text(
+                "Lunar Image Correspondence Analysis Report",
+                margin,
+                y
+            );
 
+            y += 10;
 
-        const blob =
-            new Blob(
-                [
-                    JSON.stringify(
-                        report,
-                        null,
-                        2
-                    )
-                ],
+            doc.line(
+                margin,
+                y,
+                194,
+                y
+            );
+
+            y += 10;
+
+            doc.setFont(
+                "helvetica",
+                "bold"
+            );
+
+            doc.setFontSize(13);
+
+            doc.text(
+                "ANALYSIS RESULT",
+                margin,
+                y
+            );
+
+            y += 8;
+
+            doc.setFont(
+                "helvetica",
+                "normal"
+            );
+
+            doc.setFontSize(10);
+
+            const resultLines = [
+                `Decision: ${result.classification.status}`,
+                `Correspondence Score: ${round(result.score, 1)}%`,
+                `Confidence: ${result.classification.confidence}`,
+                `Overall Image Quality: ${result.quality}`,
+                `Processing Time: ${formatMs(result.processingTime)}`
+            ];
+
+            resultLines.forEach(line => {
+                doc.text(
+                    line,
+                    margin,
+                    y
+                );
+
+                y += 6;
+            });
+
+            y += 5;
+
+            doc.setFont(
+                "helvetica",
+                "bold"
+            );
+
+            doc.text(
+                "CORRESPONDENCE METRICS",
+                margin,
+                y
+            );
+
+            y += 8;
+
+            doc.setFont(
+                "helvetica",
+                "normal"
+            );
+
+            const correspondenceLines = [
+                `Detected Keypoints A: ${result.imageA.keypoints}`,
+                `Detected Keypoints B: ${result.imageB.keypoints}`,
+                `Candidate Matches: ${result.candidateMatches}`,
+                `Verified Matches: ${result.verifiedMatches}`,
+                `Spatial Coverage: ${round(result.coverage, 1)}%`,
+                `Correspondence Strength: ${round(result.correspondenceStrength, 1)}%`,
+                `Inlier Ratio: ${round(result.inlierRatio * 100, 1)}%`,
+                `Geometric Consistency: ${round(result.geometricConsistency, 1)}%`,
+                `Homography: ${result.homographyStatus}`,
+                `Verification: ${result.verificationStatus}`
+            ];
+
+            correspondenceLines.forEach(line => {
+                doc.text(
+                    line,
+                    margin,
+                    y
+                );
+
+                y += 5.5;
+            });
+
+            y += 5;
+
+            doc.setFont(
+                "helvetica",
+                "bold"
+            );
+
+            doc.text(
+                "IMAGE QUALITY",
+                margin,
+                y
+            );
+
+            y += 8;
+
+            doc.setFont(
+                "helvetica",
+                "normal"
+            );
+
+            const qualityLines = [
+                `Image A: ${result.imageA.width} × ${result.imageA.height}`,
+                `Image A Quality: ${round(result.imageA.qualityScore, 1)}% (${result.imageA.qualityLabel})`,
+                `Image B: ${result.imageB.width} × ${result.imageB.height}`,
+                `Image B Quality: ${round(result.imageB.qualityScore, 1)}% (${result.imageB.qualityLabel})`
+            ];
+
+            qualityLines.forEach(line => {
+                doc.text(
+                    line,
+                    margin,
+                    y
+                );
+
+                y += 5.5;
+            });
+
+            y += 5;
+
+            doc.setFont(
+                "helvetica",
+                "bold"
+            );
+
+            doc.text(
+                "INTERPRETATION",
+                margin,
+                y
+            );
+
+            y += 7;
+
+            doc.setFont(
+                "helvetica",
+                "normal"
+            );
+
+            const interpretation =
+                doc.splitTextToSize(
+                    result.interpretation,
+                    178
+                );
+
+            doc.text(
+                interpretation,
+                margin,
+                y
+            );
+
+            y +=
+                interpretation.length *
+                5 +
+                7;
+
+            /* Visualization */
+
+            if (
+                result.visualization &&
+                y < 230
+            ) {
+                doc.setFont(
+                    "helvetica",
+                    "bold"
+                );
+
+                doc.text(
+                    "CORRESPONDENCE VISUALIZATION",
+                    margin,
+                    y
+                );
+
+                y += 6;
+
+                try {
+                    doc.addImage(
+                        result.visualization,
+                        "JPEG",
+                        margin,
+                        y,
+                        178,
+                        72
+                    );
+                } catch (imageError) {
+                    console.warn(
+                        "Could not embed visualization:",
+                        imageError
+                    );
+                }
+            }
+
+            /* Footer */
+
+            doc.setFontSize(8);
+            doc.setFont(
+                "helvetica",
+                "normal"
+            );
+
+            doc.text(
+                "LUNARMATCH • Lunar Intelligence Platform",
+                margin,
+                287
+            );
+
+            doc.text(
+                new Date().toLocaleString(),
+                194,
+                287,
                 {
-                    type:
-                        "application/json"
+                    align: "right"
                 }
             );
 
-
-        const url =
-            URL.createObjectURL(
-                blob
+            doc.save(
+                "LUNARMATCH_Analysis_Report.pdf"
             );
 
-
-        const link =
-            document.createElement(
-                "a"
+        } catch (error) {
+            console.error(
+                "PDF generation error:",
+                error
             );
 
+            alert(
+                "The PDF report could not be generated. Please try again."
+            );
 
-        link.href =
-            url;
+        } finally {
+            if (button) {
+                button.disabled =
+                    !lastAnalysis;
 
-
-        link.download =
-            "LUNARMATCH_Analysis_Report.json";
-
-
-        document.body.appendChild(
-            link
-        );
-
-
-        link.click();
-
-
-        link.remove();
-
-
-        URL.revokeObjectURL(
-            url
-        );
-
-    } catch (error) {
-
-        console.error(
-            "REPORT ERROR:",
-            error
-        );
-
-
-        alert(
-            "Unable to export the analysis report."
-        );
+                button.textContent =
+                    "DOWNLOAD PDF REPORT";
+            }
+        }
     }
-}
 
+    /* ---------------------------------------------------------
+       FILE INPUT SETUP
+    --------------------------------------------------------- */
 
-if (downloadReportBtn) {
+    function setupImageInput(
+        inputId,
+        previewId,
+        slot
+    ) {
+        const input = $(inputId);
 
-    downloadReportBtn.addEventListener(
-        "click",
-        downloadReport
-    );
-}
+        if (!input) return;
 
+        input.addEventListener(
+            "change",
+            async () => {
+                const file =
+                    input.files &&
+                    input.files[0];
 
-// =========================================================
-// NAVIGATION
-// =========================================================
+                if (!file) return;
 
-document
-    .querySelectorAll("nav a")
-    .forEach(link => {
+                try {
+                    validateFile(file);
 
-        link.addEventListener(
-            "click",
-            () => {
+                    if (slot === "A") {
+                        imageAFile = file;
+                        imageAData =
+                            await fileToDataURL(file);
+                    } else {
+                        imageBFile = file;
+                        imageBData =
+                            await fileToDataURL(file);
+                    }
 
-                document
-                    .querySelectorAll(
-                        "nav a"
-                    )
-                    .forEach(item => {
+                    showPreview(
+                        file,
+                        previewId
+                    );
 
-                        item.classList.remove(
-                            "active"
-                        );
-                    });
+                    resetResults();
 
+                    setText(
+                        "status",
+                        slot === "A"
+                            ? "IMAGE A READY"
+                            : "IMAGE B READY"
+                    );
 
-                link.classList.add(
-                    "active"
-                );
+                } catch (error) {
+                    alert(
+                        error.message
+                    );
+
+                    input.value = "";
+
+                    if (slot === "A") {
+                        imageAFile = null;
+                    } else {
+                        imageBFile = null;
+                    }
+                }
             }
         );
-    });
+    }
 
+    /* ---------------------------------------------------------
+       DRAG & DROP
+    --------------------------------------------------------- */
 
-// =========================================================
-// CLEANUP
-// =========================================================
+    function setupDropZone(
+        zone,
+        input,
+        previewId,
+        slot
+    ) {
+        if (!zone || !input) return;
 
-window.addEventListener(
-    "beforeunload",
-    () => {
+        [
+            "dragenter",
+            "dragover"
+        ].forEach(eventName => {
+            zone.addEventListener(
+                eventName,
+                event => {
+                    event.preventDefault();
+                    event.stopPropagation();
 
-        if (previewURL_A) {
+                    zone.classList.add(
+                        "drag-active"
+                    );
+                }
+            );
+        });
 
-            URL.revokeObjectURL(
-                previewURL_A
+        [
+            "dragleave",
+            "drop"
+        ].forEach(eventName => {
+            zone.addEventListener(
+                eventName,
+                event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    zone.classList.remove(
+                        "drag-active"
+                    );
+                }
+            );
+        });
+
+        zone.addEventListener(
+            "drop",
+            event => {
+                const files =
+                    event.dataTransfer.files;
+
+                if (
+                    !files ||
+                    !files.length
+                ) {
+                    return;
+                }
+
+                const file = files[0];
+
+                try {
+                    validateFile(file);
+
+                    const dataTransfer =
+                        new DataTransfer();
+
+                    dataTransfer.items.add(
+                        file
+                    );
+
+                    input.files =
+                        dataTransfer.files;
+
+                    input.dispatchEvent(
+                        new Event(
+                            "change",
+                            {
+                                bubbles: true
+                            }
+                        )
+                    );
+
+                } catch (error) {
+                    alert(
+                        error.message
+                    );
+                }
+            }
+        );
+    }
+
+    /* ---------------------------------------------------------
+       NAVIGATION
+    --------------------------------------------------------- */
+
+    function setupNavigation() {
+        const links =
+            document.querySelectorAll(
+                'a[href^="#"]'
+            );
+
+        links.forEach(link => {
+            link.addEventListener(
+                "click",
+                event => {
+                    const targetId =
+                        link.getAttribute(
+                            "href"
+                        );
+
+                    if (
+                        !targetId ||
+                        targetId === "#"
+                    ) {
+                        return;
+                    }
+
+                    const target =
+                        document.querySelector(
+                            targetId
+                        );
+
+                    if (!target) return;
+
+                    event.preventDefault();
+
+                    target.scrollIntoView({
+                        behavior: "smooth",
+                        block: "start"
+                    });
+                }
+            );
+        });
+    }
+
+    /* ---------------------------------------------------------
+       BUTTON EFFECTS
+    --------------------------------------------------------- */
+
+    function setupButtonEffects() {
+        document
+            .querySelectorAll(
+                "button"
+            )
+            .forEach(button => {
+                button.addEventListener(
+                    "click",
+                    () => {
+                        button.classList.add(
+                            "button-pulse"
+                        );
+
+                        setTimeout(
+                            () => {
+                                button.classList.remove(
+                                    "button-pulse"
+                                );
+                            },
+                            260
+                        );
+                    }
+                );
+            });
+    }
+
+    /* ---------------------------------------------------------
+       REGISTRATION / CONTACT
+    --------------------------------------------------------- */
+
+    function setupPlaceholderActions() {
+        const registration =
+            $("registrationBtn");
+
+        if (registration) {
+            registration.addEventListener(
+                "click",
+                () => {
+                    alert(
+                        "LUNARMATCH account registration will be available in the next platform release."
+                    );
+                }
             );
         }
 
+        const contact =
+            $("contactBtn");
 
-        if (previewURL_B) {
+        if (contact) {
+            contact.addEventListener(
+                "click",
+                () => {
+                    const contactSection =
+                        $("contact");
 
-            URL.revokeObjectURL(
-                previewURL_B
+                    if (contactSection) {
+                        contactSection.scrollIntoView({
+                            behavior: "smooth"
+                        });
+                    }
+                }
             );
         }
     }
-);
 
+    /* ---------------------------------------------------------
+       SYSTEM STATUS
+    --------------------------------------------------------- */
 
-// =========================================================
-// STARTUP
-// =========================================================
+    async function initializeSystem() {
+        try {
+            setText(
+                "status",
+                "SYSTEM READY"
+            );
 
-console.log(
-    "LUNARMATCH browser analysis engine initialized."
-);
+            await waitForOpenCV();
 
-console.log(
-    "Engine: OpenCV.js ORB + BFMatcher + Homography RANSAC"
-);
+            console.log(
+                "LUNARMATCH: OpenCV.js initialized."
+            );
+
+        } catch (error) {
+            console.warn(
+                "OpenCV initialization delayed:",
+                error
+            );
+
+            setText(
+                "status",
+                "READY"
+            );
+        }
+    }
+
+    /* ---------------------------------------------------------
+       INITIALIZATION
+    --------------------------------------------------------- */
+
+    document.addEventListener(
+        "DOMContentLoaded",
+        () => {
+            setupImageInput(
+                "fileA",
+                "previewA",
+                "A"
+            );
+
+            setupImageInput(
+                "fileB",
+                "previewB",
+                "B"
+            );
+
+            const inputA =
+                $("fileA");
+
+            const inputB =
+                $("fileB");
+
+            const drops =
+                document.querySelectorAll(
+                    ".drop-new"
+                );
+
+            setupDropZone(
+                drops[0],
+                inputA,
+                "previewA",
+                "A"
+            );
+
+            setupDropZone(
+                drops[1],
+                inputB,
+                "previewB",
+                "B"
+            );
+
+            const compare =
+                $("compareBtn");
+
+            if (compare) {
+                compare.addEventListener(
+                    "click",
+                    analyzeImages
+                );
+            }
+
+            const report =
+                $("downloadReportBtn");
+
+            if (report) {
+                report.addEventListener(
+                    "click",
+                    downloadReport
+                );
+            }
+
+            setupNavigation();
+            setupButtonEffects();
+            setupPlaceholderActions();
+
+            resetResults();
+
+            initializeSystem();
+        }
+    );
+
+})();
