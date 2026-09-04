@@ -1,125 +1,306 @@
 const fileA = document.getElementById("fileA");
 const fileB = document.getElementById("fileB");
 
-function setup(input, img, drop) {
-    input.addEventListener("change", () => {
-        const f = input.files[0];
+const previewA = document.getElementById("previewA");
+const previewB = document.getElementById("previewB");
 
-        if (!f) return;
+const dropA = document.querySelectorAll(".drop-new")[0];
+const dropB = document.querySelectorAll(".drop-new")[1];
 
-        img.src = URL.createObjectURL(f);
-        img.style.display = "block";
 
-        const icon = drop.querySelector(".upload-icon");
-        const strong = drop.querySelector("strong");
-        const small = drop.querySelector("small");
+// =========================================================
+// IMAGE INPUT
+// =========================================================
 
-        if (icon) icon.style.display = "none";
-        if (strong) strong.style.display = "none";
-        if (small) small.style.display = "none";
-    });
+function setupImageInput(input, preview, drop, name) {
+
+  input.addEventListener("change", () => {
+
+    const file = input.files[0];
+
+    if (!file) return;
+
+    showPreview(file, preview, drop, name);
+
+  });
+
+
+  // Drag & drop
+
+  drop.addEventListener("dragover", (event) => {
+
+    event.preventDefault();
+
+    drop.classList.add("dragging");
+
+  });
+
+
+  drop.addEventListener("dragleave", () => {
+
+    drop.classList.remove("dragging");
+
+  });
+
+
+  drop.addEventListener("drop", (event) => {
+
+    event.preventDefault();
+
+    drop.classList.remove("dragging");
+
+    const file = event.dataTransfer.files[0];
+
+    if (!file || !file.type.startsWith("image/")) {
+
+      alert("Please select a valid image file.");
+
+      return;
+    }
+
+    const dataTransfer = new DataTransfer();
+
+    dataTransfer.items.add(file);
+
+    input.files = dataTransfer.files;
+
+    showPreview(file, preview, drop, name);
+
+  });
+
 }
 
-setup(
-    fileA,
-    document.getElementById("previewA"),
-    document.querySelectorAll(".drop")[0]
+
+function showPreview(file, preview, drop, name) {
+
+  preview.src = URL.createObjectURL(file);
+
+  preview.style.display = "block";
+
+  const content = drop.querySelector(".drop-content");
+
+  if (content) {
+
+    content.style.opacity = "0";
+
+  }
+
+  drop.classList.add("has-image");
+
+  drop.dataset.filename = file.name;
+
+}
+
+
+// Initialize
+
+setupImageInput(
+  fileA,
+  previewA,
+  dropA,
+  "IMAGE A"
 );
 
-setup(
-    fileB,
-    document.getElementById("previewB"),
-    document.querySelectorAll(".drop")[1]
+setupImageInput(
+  fileB,
+  previewB,
+  dropB,
+  "IMAGE B"
 );
+
+
+// =========================================================
+// SMOOTH NAVIGATION
+// =========================================================
+
+document.querySelectorAll("nav a").forEach((link) => {
+
+  link.addEventListener("click", () => {
+
+    document.querySelectorAll("nav a")
+      .forEach((item) => item.classList.remove("active"));
+
+    link.classList.add("active");
+
+  });
+
+});
+
+
+// =========================================================
+// ANALYSIS
+// =========================================================
 
 async function compareImages() {
 
-    if (!fileA.files[0] || !fileB.files[0]) {
-        alert("Please upload both Image A and Image B first.");
-        return;
-    }
+  if (!fileA.files[0] || !fileB.files[0]) {
 
-    const btn = document.getElementById("compareBtn");
-    const status = document.getElementById("status");
-    const score = document.getElementById("score");
+    alert("Please upload both Image A and Image B first.");
 
-    btn.disabled = true;
-    btn.textContent = "Analyzing lunar images...";
-    status.textContent = "ANALYZING...";
-    score.textContent = "...";
+    return;
+  }
 
-    const formData = new FormData();
 
-    formData.append("image1", fileA.files[0]);
-    formData.append("image2", fileB.files[0]);
+  const btn = document.getElementById("compareBtn");
+
+  const status = document.getElementById("status");
+
+  const score = document.getElementById("score");
+
+
+  // Loading state
+
+  btn.disabled = true;
+
+  btn.innerHTML = `
+    <span>ANALYZING LUNAR DATA...</span>
+    <b>◌</b>
+  `;
+
+  status.textContent = "ANALYSIS IN PROGRESS";
+
+  score.textContent = "···";
+
+
+  // Reset result values
+
+  document.getElementById("features").textContent = "Processing";
+
+  document.getElementById("confidence").textContent = "Processing";
+
+  document.getElementById("quality").textContent = "Processing";
+
+  document.getElementById("time").textContent = "Processing";
+
+
+  const formData = new FormData();
+
+  formData.append("image1", fileA.files[0]);
+
+  formData.append("image2", fileB.files[0]);
+
+
+  try {
+
+    const response = await fetch("/api/match", {
+
+      method: "POST",
+
+      body: formData
+
+    });
+
+
+    let data;
 
     try {
 
-        const response = await fetch("/api/match", {
-            method: "POST",
-            body: formData
-        });
+      data = await response.json();
 
-        let data;
+    } catch {
 
-        try {
-            data = await response.json();
-        } catch {
-            throw new Error(
-                "The server returned an invalid response. Please check the backend."
-            );
-        }
-
-        if (!response.ok) {
-            throw new Error(
-                data.error || `Server error (${response.status})`
-            );
-        }
-
-        status.textContent = data.match_found
-            ? "MATCH FOUND"
-            : "NO STRONG MATCH";
-
-        score.textContent =
-            Number(data.match_percentage || 0).toFixed(1) + "%";
-
-        document.getElementById("features").textContent =
-            data.corresponding_features ?? "—";
-
-        document.getElementById("confidence").textContent =
-            data.confidence ?? "—";
-
-        document.getElementById("quality").textContent =
-            data.quality ?? "—";
-
-        document.getElementById("time").textContent =
-            Number(data.processing_time || 0).toFixed(2) + " sec";
-
-        if (data.visualization) {
-            const image =
-                "data:image/jpeg;base64," + data.visualization;
-
-            document.getElementById("resultA").src = image;
-            document.getElementById("resultB").src = image;
-        }
-
-    } catch (error) {
-
-        console.error("Analysis error:", error);
-
-        alert(error.message);
-
-        status.textContent = "ANALYSIS FAILED";
-        score.textContent = "—";
-
-    } finally {
-
-        btn.disabled = false;
-        btn.textContent = "⌕  COMPARE IMAGES";
+      throw new Error(
+        "The analysis server returned an invalid response."
+      );
 
     }
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        data.error || "Backend analysis failed."
+      );
+
+    }
+
+
+    // =====================================================
+    // RESULTS
+    // =====================================================
+
+    status.textContent =
+      data.match_found
+        ? "MATCH FOUND"
+        : "NO STRONG MATCH";
+
+
+    score.textContent =
+      Number(data.match_percentage).toFixed(1) + "%";
+
+
+    document.getElementById("features").textContent =
+      data.corresponding_features ?? "—";
+
+
+    document.getElementById("confidence").textContent =
+      data.confidence ?? "—";
+
+
+    document.getElementById("quality").textContent =
+      data.quality ?? "—";
+
+
+    document.getElementById("time").textContent =
+      Number(data.processing_time).toFixed(2) + " sec";
+
+
+    // Visualization
+
+    if (data.visualization) {
+
+      const image =
+        "data:image/jpeg;base64," +
+        data.visualization;
+
+      document.getElementById("resultA").src = image;
+
+      document.getElementById("resultB").src = image;
+
+    }
+
+
+  } catch (error) {
+
+    console.error("LUNARMATCH:", error);
+
+
+    status.textContent = "ANALYSIS FAILED";
+
+    score.textContent = "—";
+
+    document.getElementById("features").textContent = "—";
+
+    document.getElementById("confidence").textContent = "—";
+
+    document.getElementById("quality").textContent = "—";
+
+    document.getElementById("time").textContent = "—";
+
+
+    alert(error.message);
+
+  }
+
+
+  finally {
+
+    btn.disabled = false;
+
+    btn.innerHTML = `
+      <span>RUN CORRESPONDENCE ENGINE</span>
+      <b>→</b>
+    `;
+
+  }
+
 }
 
+
+// =========================================================
+// BUTTON
+// =========================================================
+
 document
-    .getElementById("compareBtn")
-    .addEventListener("click", compareImages);
+  .getElementById("compareBtn")
+  .addEventListener("click", compareImages);
