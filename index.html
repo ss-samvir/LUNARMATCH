@@ -1,623 +1,610 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<title>LUNARMATCH — Lunar Image Correspondence</title>
+  <title>LUNARMATCH | Lunar Intelligence Platform</title>
 
-<link rel="stylesheet" href="style.css">
-
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Orbitron:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
 
-<!-- NAVIGATION -->
-<header class="nav">
+  <!-- ================= NAVIGATION ================= -->
+  <header class="topbar">
 
-  <div class="brand">
-    <div class="moon">◐</div>
-
-    <div>
-      <b>LUNAR<span>MATCH</span></b>
-      <small>Lunar Image Correspondence System</small>
-    </div>
-  </div>
-
-  <nav>
-    <a class="active" href="#home">⌂ <span>Home</span></a>
-    <a href="#compare">⇄ <span>Compare</span></a>
-    <a href="#how">⚙ <span>How It Works</span></a>
-    <a href="#about">ⓘ <span>About</span></a>
-    <a href="#contact">✉ <span>Contact</span></a>
-  </nav>
-
-</header>
-
-
-<main>
-
-<!-- HERO -->
-<section id="home" class="hero">
-
-  <div class="hero-overlay"></div>
-
-  <div class="hero-content">
-
-    <div class="status-chip">
-      <span class="status-dot"></span>
-      AI LUNAR IMAGE ANALYSIS
-    </div>
-
-    <p class="eyebrow">CHANDRAYAAN-2 DATA ANALYSIS</p>
-
-    <h1>
-      LUNAR<span>MATCH</span>
-    </h1>
-
-    <h2>
-      Lunar Image Correspondence System
-    </h2>
-
-    <p class="hero-description">
-      Discover corresponding lunar surface features using
-      intelligent image matching and computer vision.
-    </p>
-
-    <div class="hero-buttons">
-
-      <button
-        class="hero-btn"
-        onclick="document.querySelector('#compare').scrollIntoView({behavior:'smooth'})">
-        START ANALYSIS
-        <span>→</span>
-      </button>
-
-      <a class="secondary-btn" href="#how">
-        HOW IT WORKS
-      </a>
-
-    </div>
-
-    <div class="hero-stats">
-
-      <div>
-        <strong>AI</strong>
-        <span>Powered Analysis</span>
+    <a href="#home" class="brand">
+      <div class="brand-orbit">
+        <span></span>
+        ◐
       </div>
 
       <div>
-        <strong>SIFT</strong>
-        <span>Feature Detection</span>
+        <strong>LUNAR<span>MATCH</span></strong>
+        <small>LUNAR INTELLIGENCE PLATFORM</small>
       </div>
+    </a>
 
-      <div>
-        <strong>FLANN</strong>
-        <span>Feature Matching</span>
-      </div>
+    <nav>
+      <a href="#home" class="active">HOME</a>
+      <a href="#mission">MISSION</a>
+      <a href="#compare">ANALYZE</a>
+      <a href="#how">PROCESS</a>
+      <a href="#about">ABOUT</a>
+      <a href="#contact">CONTACT</a>
+    </nav>
 
+    <div class="system-status">
+      <i></i>
+      SYSTEM ONLINE
     </div>
 
-  </div>
-
-</section>
+  </header>
 
 
-<!-- COMPARISON WORKSPACE -->
-<section id="compare" class="workspace-section">
+  <!-- ================= HERO ================= -->
+  <main>
 
-  <div class="section-heading">
+    <section id="home" class="hero-new">
 
-    <div>
-      <p class="section-label">ANALYSIS WORKSPACE</p>
+      <div class="stars"></div>
 
-      <h2>
-        Compare Lunar Images
-      </h2>
+      <div class="hero-left">
 
-      <p>
-        Upload two lunar surface images and identify
-        corresponding visual features.
-      </p>
-    </div>
-
-    <div class="live-status">
-      <span></span>
-      SYSTEM READY
-    </div>
-
-  </div>
-
-
-  <section class="workspace">
-
-    <!-- UPLOAD PANEL -->
-    <div class="panel upload-panel">
-
-      <div class="panel-heading">
-
-        <div class="panel-icon">▧</div>
-
-        <div>
-          <h3>UPLOAD LUNAR IMAGES</h3>
-          <p>
-            Select two Chandrayaan-2 lunar surface images
-          </p>
+        <div class="mission-label">
+          <span></span>
+          CHANDRAYAAN-2 DATA INTERFACE
         </div>
 
-      </div>
+        <h1>
+          SEE THE<br>
+          <span>MOON</span><br>
+          DIFFERENTLY.
+        </h1>
 
+        <p class="hero-description">
+          An AI-powered lunar image correspondence platform
+          designed to identify matching geological features
+          across Chandrayaan-2 surface imagery.
+        </p>
 
-      <div class="uploads">
+        <div class="hero-actions">
 
-        <!-- IMAGE A -->
-        <div class="upload-column">
+          <button class="primary-btn"
+            onclick="document.querySelector('#compare').scrollIntoView({behavior:'smooth'})">
+            START ANALYSIS
+            <span>→</span>
+          </button>
 
-          <div class="image-label">
-            <span>01</span>
-            IMAGE A
-          </div>
-
-          <label class="drop" for="fileA">
-
-            <div class="upload-content">
-
-              <div class="upload-icon">↥</div>
-
-              <strong>Upload Image A</strong>
-
-              <small>
-                Drag & drop or click to browse
-              </small>
-
-              <span class="upload-format">
-                JPG · JPEG · PNG · TIF
-              </span>
-
-            </div>
-
-            <img id="previewA" alt="Image A preview">
-
-          </label>
-
-          <input
-            id="fileA"
-            type="file"
-            accept="image/*"
-            hidden
-          >
+          <a href="#how" class="secondary-btn">
+            EXPLORE TECHNOLOGY
+          </a>
 
         </div>
 
-
-        <!-- IMAGE B -->
-        <div class="upload-column">
-
-          <div class="image-label">
-            <span>02</span>
-            IMAGE B
-          </div>
-
-          <label class="drop" for="fileB">
-
-            <div class="upload-content">
-
-              <div class="upload-icon">↥</div>
-
-              <strong>Upload Image B</strong>
-
-              <small>
-                Drag & drop or click to browse
-              </small>
-
-              <span class="upload-format">
-                JPG · JPEG · PNG · TIF
-              </span>
-
-            </div>
-
-            <img id="previewB" alt="Image B preview">
-
-          </label>
-
-          <input
-            id="fileB"
-            type="file"
-            accept="image/*"
-            hidden
-          >
-
-        </div>
-
-      </div>
-
-
-      <button
-        class="compare"
-        id="compareBtn">
-
-        <span>⌕</span>
-        COMPARE IMAGES
-        <b>→</b>
-
-      </button>
-
-
-      <div class="secure">
-
-        <span>◆</span>
-
-        Images are processed securely for this prototype.
-        No permanent image storage is required.
-
-      </div>
-
-    </div>
-
-
-    <!-- RESULTS PANEL -->
-    <div class="panel result-panel">
-
-      <div class="panel-heading">
-
-        <div class="panel-icon">▥</div>
-
-        <div>
-          <h3>MATCH RESULTS</h3>
-          <p>AI correspondence analysis output</p>
-        </div>
-
-      </div>
-
-
-      <!-- RESULT STATUS -->
-      <div class="match-banner">
-
-        <div class="match-state">
-
-          <span class="match-icon">✓</span>
+        <div class="hero-data">
 
           <div>
-            <small>ANALYSIS STATUS</small>
-            <b id="status">READY FOR ANALYSIS</b>
+            <strong>02</strong>
+            <span>INPUT IMAGES</span>
           </div>
 
-        </div>
-
-        <div class="score-box">
-
-          <small>MATCH SCORE</small>
-
-          <strong id="score">—</strong>
-
-        </div>
-
-      </div>
-
-
-      <div class="result-grid">
-
-        <!-- DETAILS -->
-        <div class="details">
-
-          <div class="subheading">
-            <span></span>
-            MATCH DETAILS
+          <div>
+            <strong>AI</strong>
+            <span>FEATURE ANALYSIS</span>
           </div>
 
-
-          <div class="row">
-
-            <span class="row-icon">◎</span>
-
-            <div>
-              <small>Corresponding Features</small>
-              <b id="features">—</b>
-            </div>
-
-          </div>
-
-
-          <div class="row">
-
-            <span class="row-icon">⬡</span>
-
-            <div>
-              <small>Confidence Level</small>
-              <b id="confidence" class="pill">—</b>
-            </div>
-
-          </div>
-
-
-          <div class="row">
-
-            <span class="row-icon">☆</span>
-
-            <div>
-              <small>Match Quality</small>
-              <b id="quality" class="pill">—</b>
-            </div>
-
-          </div>
-
-
-          <div class="row">
-
-            <span class="row-icon">◷</span>
-
-            <div>
-              <small>Processing Time</small>
-              <b id="time">—</b>
-            </div>
-
-          </div>
-
-
-          <div class="row">
-
-            <span class="row-icon">‹/›</span>
-
-            <div>
-              <small>Algorithm Used</small>
-              <b>SIFT + FLANN</b>
-            </div>
-
-          </div>
-
-        </div>
-
-
-        <!-- VISUALIZATION -->
-        <div class="visual">
-
-          <div class="subheading">
-            <span></span>
-            VISUALIZATION
-          </div>
-
-
-          <div class="images">
-
-            <div class="result-image">
-
-              <span>IMAGE A</span>
-
-              <img
-                id="resultA"
-                alt="Image A result">
-
-            </div>
-
-
-            <div class="result-image">
-
-              <span>IMAGE B</span>
-
-              <img
-                id="resultB"
-                alt="Image B result">
-
-            </div>
-
-          </div>
-
-
-          <div class="visual-note">
-
-            <span>●</span>
-
-            Matching keypoints are visualized when
-            returned by the analysis backend.
-
+          <div>
+            <strong>SIFT</strong>
+            <span>MATCHING ENGINE</span>
           </div>
 
         </div>
 
       </div>
 
-    </div>
 
-  </section>
+      <div class="hero-right">
 
-</section>
+        <div class="moon-system">
 
+          <div class="orbit orbit-1"></div>
+          <div class="orbit orbit-2"></div>
+          <div class="orbit orbit-3"></div>
 
-<!-- HOW IT WORKS -->
-<section id="how" class="how-section">
+          <div class="moon-large">
+            <div class="moon-crater c1"></div>
+            <div class="moon-crater c2"></div>
+            <div class="moon-crater c3"></div>
+            <div class="moon-crater c4"></div>
+          </div>
 
-  <div class="section-heading centered">
+          <div class="satellite">
+            ◇
+          </div>
 
-    <p class="section-label">THE PROCESS</p>
+          <div class="coordinate-box">
+            <small>MISSION TARGET</small>
+            <strong>MOON / SURFACE</strong>
+            <span>20° 11' 42" N</span>
+            <span>75° 18' 09" E</span>
+          </div>
 
-    <h2>How LUNARMATCH Works</h2>
+        </div>
 
-    <p>
-      A simple four-step pipeline for identifying
-      corresponding lunar surface features.
-    </p>
+      </div>
 
-  </div>
+    </section>
 
 
-  <div class="steps">
+    <!-- ================= MISSION ================= -->
 
-    <div class="step-card">
+    <section id="mission" class="mission-section">
 
-      <div class="step-number">01</div>
+      <div class="section-intro">
 
-      <div class="step-icon">↑</div>
+        <div>
+          <span class="section-number">01</span>
+          <span class="section-tag">MISSION OBJECTIVE</span>
+        </div>
 
-      <h3>Upload Images</h3>
+        <h2>
+          Mapping the Moon,<br>
+          <span>one feature at a time.</span>
+        </h2>
 
-      <p>
-        Provide two lunar surface images
-        for comparison.
-      </p>
+      </div>
 
-    </div>
+      <div class="mission-grid">
 
+        <div class="mission-card large">
 
-    <div class="step-line"></div>
+          <span class="card-number">01</span>
 
+          <div class="card-icon">◉</div>
 
-    <div class="step-card">
+          <h3>DISCOVER</h3>
 
-      <div class="step-number">02</div>
+          <p>
+            Compare lunar surface imagery and discover
+            corresponding geological structures captured
+            from different observations.
+          </p>
 
-      <div class="step-icon">✦</div>
+        </div>
 
-      <h3>Feature Extraction</h3>
 
-      <p>
-        Computer vision identifies important
-        visual features.
-      </p>
+        <div class="mission-card">
 
-    </div>
+          <span class="card-number">02</span>
 
+          <div class="card-icon">⌁</div>
 
-    <div class="step-line"></div>
+          <h3>ANALYZE</h3>
 
+          <p>
+            Extract distinctive visual features using
+            computer vision algorithms.
+          </p>
 
-    <div class="step-card">
+        </div>
 
-      <div class="step-number">03</div>
 
-      <div class="step-icon">⌁</div>
+        <div class="mission-card">
 
-      <h3>Feature Matching</h3>
+          <span class="card-number">03</span>
 
-      <p>
-        SIFT and FLANN compare corresponding
-        features between images.
-      </p>
+          <div class="card-icon">✦</div>
 
-    </div>
+          <h3>CORRELATE</h3>
 
+          <p>
+            Match corresponding features and calculate
+            the strength of the detected correspondence.
+          </p>
 
-    <div class="step-line"></div>
+        </div>
 
+      </div>
 
-    <div class="step-card">
+    </section>
 
-      <div class="step-number">04</div>
 
-      <div class="step-icon">✓</div>
+    <!-- ================= ANALYSIS ================= -->
 
-      <h3>Get Results</h3>
+    <section id="compare" class="analysis-section">
 
-      <p>
-        View the match score, confidence
-        and visualization.
-      </p>
+      <div class="analysis-heading">
 
-    </div>
+        <div>
+          <span class="section-number">02</span>
+          <span class="section-tag">MISSION CONTROL</span>
+        </div>
 
-  </div>
+        <h2>LUNAR IMAGE <span>ANALYSIS</span></h2>
 
-</section>
+        <p>
+          Upload two lunar images to initiate the correspondence engine.
+        </p>
 
+      </div>
 
-<!-- ABOUT -->
-<section id="about" class="about-section">
 
-  <div class="about-card">
+      <div class="analysis-console">
 
-    <div class="about-content">
+        <!-- LEFT SIDE -->
 
-      <p class="section-label">ABOUT THE PROJECT</p>
+        <div class="input-console">
 
-      <h2>
-        Mapping Lunar Correspondence
-      </h2>
+          <div class="console-header">
+            <div>
+              <span class="live-dot"></span>
+              IMAGE ACQUISITION
+            </div>
 
-      <p>
-        LUNARMATCH is a web interface for a lunar image
-        correspondence pipeline designed around
-        Chandrayaan-2 imagery.
-      </p>
+            <span>INPUT / 02</span>
+          </div>
 
-      <p>
-        The system connects an interactive frontend with
-        a Python-based computer vision backend to identify
-        corresponding features between lunar surface images.
-      </p>
 
-    </div>
+          <div class="image-inputs">
 
+            <!-- IMAGE A -->
 
-    <div class="mission-card">
+            <div class="image-input">
 
-      <div class="mission-icon">◐</div>
+              <div class="input-label">
+                <span>A</span>
+                SOURCE IMAGE
+              </div>
 
-      <strong>CHANDRAYAAN-2</strong>
+              <label class="drop-new" for="fileA">
 
-      <span>
-        Lunar Exploration Data
-      </span>
+                <div class="drop-content">
 
-    </div>
+                  <div class="upload-symbol">＋</div>
 
-  </div>
+                  <strong>SELECT IMAGE A</strong>
 
-</section>
+                  <span>
+                    Click to browse lunar imagery
+                  </span>
 
-</main>
+                  <small>
+                    JPG · JPEG · PNG · TIF
+                  </small>
 
+                </div>
 
-<!-- FOOTER -->
-<footer id="contact">
+                <img id="previewA" alt="Image A preview">
 
-  <div class="footer-main">
+              </label>
+
+              <input
+                id="fileA"
+                type="file"
+                accept="image/*"
+                hidden
+              >
+
+            </div>
+
+
+            <!-- IMAGE B -->
+
+            <div class="image-input">
+
+              <div class="input-label">
+                <span>B</span>
+                REFERENCE IMAGE
+              </div>
+
+              <label class="drop-new" for="fileB">
+
+                <div class="drop-content">
+
+                  <div class="upload-symbol">＋</div>
+
+                  <strong>SELECT IMAGE B</strong>
+
+                  <span>
+                    Click to browse lunar imagery
+                  </span>
+
+                  <small>
+                    JPG · JPEG · PNG · TIF
+                  </small>
+
+                </div>
+
+                <img id="previewB" alt="Image B preview">
+
+              </label>
+
+              <input
+                id="fileB"
+                type="file"
+                accept="image/*"
+                hidden
+              >
+
+            </div>
+
+          </div>
+
+
+          <button id="compareBtn" class="launch-btn">
+
+            <span>RUN CORRESPONDENCE ENGINE</span>
+
+            <b>→</b>
+
+          </button>
+
+
+          <div class="console-footer">
+
+            <span>● SECURE PROCESSING</span>
+            <span>NO IMAGE STORAGE</span>
+
+          </div>
+
+        </div>
+
+
+        <!-- RIGHT SIDE -->
+
+        <div class="result-console">
+
+          <div class="console-header">
+
+            <div>
+              <span class="live-dot"></span>
+              ANALYSIS OUTPUT
+            </div>
+
+            <span>LIVE RESULT</span>
+
+          </div>
+
+
+          <div class="result-status">
+
+            <div class="status-circle">
+              <span>✓</span>
+            </div>
+
+            <div>
+              <small>ANALYSIS STATUS</small>
+
+              <strong id="status">
+                READY FOR ANALYSIS
+              </strong>
+            </div>
+
+            <div class="score-display">
+              <span>MATCH</span>
+              <strong id="score">—</strong>
+            </div>
+
+          </div>
+
+
+          <div class="metrics">
+
+            <div class="metric">
+              <span>FEATURES</span>
+              <strong id="features">—</strong>
+            </div>
+
+            <div class="metric">
+              <span>CONFIDENCE</span>
+              <strong id="confidence">—</strong>
+            </div>
+
+            <div class="metric">
+              <span>QUALITY</span>
+              <strong id="quality">—</strong>
+            </div>
+
+            <div class="metric">
+              <span>PROCESS TIME</span>
+              <strong id="time">—</strong>
+            </div>
+
+          </div>
+
+
+          <div class="visualization-new">
+
+            <div class="visual-header">
+
+              <span>
+                FEATURE CORRESPONDENCE MAP
+              </span>
+
+              <small>
+                SIFT + FLANN
+              </small>
+
+            </div>
+
+
+            <div class="visual-images">
+
+              <div>
+                <label>IMAGE A</label>
+                <img id="resultA" alt="Analysis result A">
+              </div>
+
+              <div>
+                <label>IMAGE B</label>
+                <img id="resultB" alt="Analysis result B">
+              </div>
+
+            </div>
+
+
+            <div class="visual-note">
+              ● Corresponding keypoints are displayed
+              when returned by the analysis engine.
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </section>
+
+
+    <!-- ================= PROCESS ================= -->
+
+    <section id="how" class="process-section">
+
+      <div class="section-intro center">
+
+        <span class="section-number">03</span>
+        <span class="section-tag">THE TECHNOLOGY</span>
+
+        <h2>
+          FROM RAW IMAGE<br>
+          <span>TO CORRESPONDENCE.</span>
+        </h2>
+
+      </div>
+
+
+      <div class="process-line">
+
+        <div class="process-step">
+
+          <span>01</span>
+
+          <div class="process-icon">↑</div>
+
+          <h3>ACQUIRE</h3>
+
+          <p>
+            Two lunar surface images enter the analysis pipeline.
+          </p>
+
+        </div>
+
+
+        <div class="process-step">
+
+          <span>02</span>
+
+          <div class="process-icon">✦</div>
+
+          <h3>EXTRACT</h3>
+
+          <p>
+            Distinctive visual features are detected from each image.
+          </p>
+
+        </div>
+
+
+        <div class="process-step">
+
+          <span>03</span>
+
+          <div class="process-icon">⌁</div>
+
+          <h3>MATCH</h3>
+
+          <p>
+            Feature descriptors are compared to locate correspondences.
+          </p>
+
+        </div>
+
+
+        <div class="process-step">
+
+          <span>04</span>
+
+          <div class="process-icon">✓</div>
+
+          <h3>REPORT</h3>
+
+          <p>
+            The system presents the resulting match and confidence.
+          </p>
+
+        </div>
+
+      </div>
+
+    </section>
+
+
+    <!-- ================= ABOUT ================= -->
+
+    <section id="about" class="about-section">
+
+      <div class="about-number">
+        04
+      </div>
+
+      <div class="about-content">
+
+        <span class="section-tag">ABOUT THE PLATFORM</span>
+
+        <h2>
+          BUILT FOR<br>
+          <span>SPACE TECHNOLOGY.</span>
+        </h2>
+
+        <p>
+          LUNARMATCH is a web interface for a lunar image
+          correspondence pipeline designed around Chandrayaan-2
+          imagery. The platform provides an intuitive interface
+          for comparing lunar surface images and visualizing
+          detected correspondences.
+        </p>
+
+        <div class="mission-tags">
+
+          <span>CHANDRAYAAN-2</span>
+          <span>ISRO</span>
+          <span>COMPUTER VISION</span>
+          <span>AI / ML</span>
+
+        </div>
+
+      </div>
+
+    </section>
+
+  </main>
+
+
+  <!-- ================= FOOTER ================= -->
+
+  <footer id="contact">
 
     <div class="footer-brand">
-
-      <div class="moon">◐</div>
-
-      <div>
-        <b>LUNAR<span>MATCH</span></b>
-        <small>Lunar Image Correspondence System</small>
-      </div>
-
+      <strong>LUNAR<span>MATCH</span></strong>
+      <small>LUNAR IMAGE CORRESPONDENCE SYSTEM</small>
     </div>
 
-
-    <div class="footer-text">
-
-      <p>
-        AI-powered lunar image correspondence
-        for space technology research.
-      </p>
-
-      <span>
-        Chandrayaan-2 · ISRO · India 🇮🇳
-      </span>
-
+    <div class="footer-center">
+      CHANDRAYAAN-2 · ISRO · INDIA 🇮🇳
     </div>
 
-  </div>
+    <div class="footer-right">
+      <span>SPACE TECHNOLOGY</span>
+      <span>© 2026</span>
+    </div>
+
+  </footer>
 
 
-  <div class="footer-bottom">
-
-    <span>
-      © 2026 LUNARMATCH
-    </span>
-
-    <span>
-      Built for Space Technology
-    </span>
-
-  </div>
-
-</footer>
-
-
-<script src="script.js"></script>
+  <script src="script.js"></script>
 
 </body>
 </html>
