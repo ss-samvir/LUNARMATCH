@@ -1,5 +1,5 @@
 /* ============================================================
-   LUNARMATCH — LUNAR CORRESPONDENCE ENGINE V8
+   LUNARMATCH — LUNAR CORRESPONDENCE ENGINE V9
    Browser-based image correspondence + geometric verification
    ============================================================ */
 
@@ -52,8 +52,7 @@
         imageAData: null,
         imageBData: null,
         lastAnalysis: null,
-        initialized: false,
-        objectUrls: []
+        initialized: false
     };
 
     /* ----------------------------------------------------------
@@ -64,12 +63,16 @@
 
     function setText(id, value) {
         const el = $(id);
-        if (el) el.textContent = value;
+        if (el) {
+            el.textContent = value;
+        }
     }
 
     function setDisabled(id, disabled) {
         const el = $(id);
-        if (el) el.disabled = disabled;
+        if (el) {
+            el.disabled = disabled;
+        }
     }
 
     function clamp(value, min, max) {
@@ -77,24 +80,34 @@
     }
 
     function round(value, digits = 1) {
-        if (!Number.isFinite(value)) return 0;
+        if (!Number.isFinite(value)) {
+            return 0;
+        }
+
         const p = Math.pow(10, digits);
+
         return Math.round(value * p) / p;
     }
 
     function delay(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+        return new Promise(resolve =>
+            setTimeout(resolve, ms)
+        );
     }
 
     function nextFrame() {
         return new Promise(resolve =>
-            requestAnimationFrame(() => resolve())
+            requestAnimationFrame(resolve)
         );
     }
 
     function distanceSquared(a, b) {
         let sum = 0;
-        const n = Math.min(a.length, b.length);
+
+        const n = Math.min(
+            a.length,
+            b.length
+        );
 
         for (let i = 0; i < n; i++) {
             const d = a[i] - b[i];
@@ -105,7 +118,10 @@
     }
 
     function formatTime(ms) {
-        if (!Number.isFinite(ms)) return "0.0 sec";
+        if (!Number.isFinite(ms)) {
+            return "0.0 sec";
+        }
+
         return `${round(ms / 1000, 1)} sec`;
     }
 
@@ -126,19 +142,26 @@
     function resetPipeline() {
         PIPELINE.forEach(id => {
             const el = $(id);
+
             if (!el) return;
 
-            el.classList.remove("active", "complete", "error");
+            el.classList.remove(
+                "active",
+                "complete",
+                "error"
+            );
         });
     }
 
     function setPipelineActive(id) {
         resetPipeline();
 
-        const index = PIPELINE.indexOf(id);
+        const index =
+            PIPELINE.indexOf(id);
 
         PIPELINE.forEach((stage, i) => {
             const el = $(stage);
+
             if (!el) return;
 
             if (i < index) {
@@ -153,18 +176,24 @@
 
     function setPipelineComplete(id) {
         const el = $(id);
-        if (el) {
-            el.classList.remove("active", "error");
-            el.classList.add("complete");
-        }
+
+        if (!el) return;
+
+        el.classList.remove(
+            "active",
+            "error"
+        );
+
+        el.classList.add("complete");
     }
 
     function setPipelineError(id) {
         const el = $(id);
-        if (el) {
-            el.classList.remove("active");
-            el.classList.add("error");
-        }
+
+        if (!el) return;
+
+        el.classList.remove("active");
+        el.classList.add("error");
     }
 
     /* ----------------------------------------------------------
@@ -188,10 +217,15 @@
             "verificationStatus"
         ];
 
-        ids.forEach(id => setText(id, "—"));
+        ids.forEach(id =>
+            setText(id, "—")
+        );
 
-        const map = $("correspondenceMap");
-        const placeholder = $("correspondencePlaceholder");
+        const map =
+            $("correspondenceMap");
+
+        const placeholder =
+            $("correspondencePlaceholder");
 
         if (map) {
             map.innerHTML = "";
@@ -202,13 +236,18 @@
             placeholder.style.display = "";
         }
 
-        const interpretation = $("interpretation");
+        const interpretation =
+            $("interpretation");
+
         if (interpretation) {
             interpretation.textContent =
                 "Upload two lunar images to begin correspondence analysis.";
         }
 
-        setDisabled("downloadReportBtn", true);
+        setDisabled(
+            "downloadReportBtn",
+            true
+        );
 
         state.lastAnalysis = null;
     }
@@ -219,10 +258,12 @@
 
     function validateImageFile(file) {
         if (!file) {
-            throw new Error("No image selected.");
+            throw new Error(
+                "No image selected."
+            );
         }
 
-        const allowed = [
+        const allowedTypes = [
             "image/jpeg",
             "image/png",
             "image/webp",
@@ -230,22 +271,361 @@
             "image/tiff"
         ];
 
-        const name = file.name.toLowerCase();
+        const name =
+            String(file.name || "")
+                .toLowerCase();
 
         const validExtension =
-            /\.(jpg|jpeg|png|webp|bmp|tif|tiff)$/.test(name);
+            /\.(jpg|jpeg|png|webp|bmp|tif|tiff)$/
+                .test(name);
 
-        if (!allowed.includes(file.type) && !validExtension) {
+        if (
+            !allowedTypes.includes(file.type) &&
+            !validExtension
+        ) {
             throw new Error(
                 "Please select a JPG, PNG, WEBP, BMP or TIFF image."
             );
         }
 
-        if (file.size > 25 * 1024 * 1024) {
-            throw new Error("Image must be smaller than 25 MB.");
+        if (
+            file.size >
+            25 * 1024 * 1024
+        ) {
+            throw new Error(
+                "Image must be smaller than 25 MB."
+            );
         }
 
         return true;
+    }
+
+    /* ----------------------------------------------------------
+       IMAGE PREVIEW
+       ---------------------------------------------------------- */
+
+    function updatePreview(
+        file,
+        previewId
+    ) {
+        if (!file) return;
+
+        const preview =
+            $(previewId);
+
+        if (!preview) {
+            console.error(
+                `LUNARMATCH: ${previewId} not found.`
+            );
+
+            return;
+        }
+
+        try {
+            const oldUrl =
+                preview.dataset.objectUrl;
+
+            if (oldUrl) {
+                URL.revokeObjectURL(
+                    oldUrl
+                );
+            }
+
+            const url =
+                URL.createObjectURL(file);
+
+            preview.dataset.objectUrl =
+                url;
+
+            preview.onload = () => {
+                preview.style.display = "block";
+            };
+
+            preview.onerror = () => {
+                preview.style.display = "none";
+
+                console.error(
+                    "LUNARMATCH: Preview could not be displayed."
+                );
+            };
+
+            preview.src = url;
+
+            preview.style.display = "block";
+
+        } catch (error) {
+            console.error(
+                "LUNARMATCH preview error:",
+                error
+            );
+        }
+    }
+
+    /* ----------------------------------------------------------
+       IMAGE HANDLING
+       ---------------------------------------------------------- */
+
+    function handleImage(
+        file,
+        side,
+        input
+    ) {
+        try {
+            validateImageFile(file);
+
+            if (side === "A") {
+
+                state.imageAFile = file;
+
+                updatePreview(
+                    file,
+                    "previewA"
+                );
+
+            } else {
+
+                state.imageBFile = file;
+
+                updatePreview(
+                    file,
+                    "previewB"
+                );
+            }
+
+            state.lastAnalysis = null;
+
+            setDisabled(
+                "downloadReportBtn",
+                true
+            );
+
+            setText(
+                "status",
+                `${side === "A" ? "IMAGE A" : "IMAGE B"} READY — ${file.name}`
+            );
+
+            console.log(
+                `LUNARMATCH: Image ${side} loaded successfully.`,
+                file.name
+            );
+
+            /*
+             * Clear the input AFTER the file has already
+             * been stored in state.
+             *
+             * This allows selecting the same file again later.
+             */
+            if (input) {
+                input.value = "";
+            }
+
+        } catch (error) {
+
+            console.error(
+                "LUNARMATCH upload error:",
+                error
+            );
+
+            setText(
+                "status",
+                `UPLOAD ERROR — ${error.message}`
+            );
+
+            if (input) {
+                input.value = "";
+            }
+        }
+    }
+
+    /* ----------------------------------------------------------
+       FILE INPUT SETUP
+       ---------------------------------------------------------- */
+
+    function setupImageInput(
+        inputId,
+        side
+    ) {
+        const input =
+            $(inputId);
+
+        if (!input) {
+            console.error(
+                `LUNARMATCH: ${inputId} not found.`
+            );
+
+            return;
+        }
+
+        input.type = "file";
+
+        input.accept =
+            ".jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff,image/*";
+
+        /*
+         * IMPORTANT:
+         * Use addEventListener rather than relying on
+         * HTML label behaviour.
+         */
+        input.addEventListener(
+            "change",
+            function () {
+
+                const file =
+                    this.files &&
+                    this.files.length
+                        ? this.files[0]
+                        : null;
+
+                if (!file) {
+                    return;
+                }
+
+                handleImage(
+                    file,
+                    side,
+                    this
+                );
+            }
+        );
+
+        console.log(
+            `LUNARMATCH: ${inputId} listener attached.`
+        );
+    }
+
+    /* ----------------------------------------------------------
+       DROP ZONE SETUP
+       ---------------------------------------------------------- */
+
+    function setupDropZone(
+        zoneId,
+        side
+    ) {
+        const zone =
+            $(zoneId);
+
+        if (!zone) {
+            console.error(
+                `LUNARMATCH: ${zoneId} not found.`
+            );
+
+            return;
+        }
+
+        const input =
+            side === "A"
+                ? $("fileA")
+                : $("fileB");
+
+        if (!input) {
+            console.error(
+                `LUNARMATCH: input for ${side} not found.`
+            );
+
+            return;
+        }
+
+        /*
+         * NORMAL CLICK
+         *
+         * This is the important fix.
+         *
+         * We explicitly open the hidden file input
+         * instead of depending on <label for="...">.
+         */
+        zone.addEventListener(
+            "click",
+            function (event) {
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                input.click();
+            }
+        );
+
+        /*
+         * DRAG ENTER
+         */
+        zone.addEventListener(
+            "dragenter",
+            function (event) {
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                zone.classList.add(
+                    "drag-active"
+                );
+            }
+        );
+
+        /*
+         * DRAG OVER
+         */
+        zone.addEventListener(
+            "dragover",
+            function (event) {
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                zone.classList.add(
+                    "drag-active"
+                );
+            }
+        );
+
+        /*
+         * DRAG LEAVE
+         */
+        zone.addEventListener(
+            "dragleave",
+            function (event) {
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                zone.classList.remove(
+                    "drag-active"
+                );
+            }
+        );
+
+        /*
+         * DROP
+         */
+        zone.addEventListener(
+            "drop",
+            function (event) {
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                zone.classList.remove(
+                    "drag-active"
+                );
+
+                const files =
+                    event.dataTransfer &&
+                    event.dataTransfer.files;
+
+                if (
+                    files &&
+                    files.length
+                ) {
+                    handleImage(
+                        files[0],
+                        side,
+                        input
+                    );
+                }
+            }
+        );
+
+        console.log(
+            `LUNARMATCH: ${zoneId} drop zone attached.`
+        );
     }
 
     /* ----------------------------------------------------------
@@ -253,59 +633,141 @@
        ---------------------------------------------------------- */
 
     function readImageFile(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
+        return new Promise(
+            (resolve, reject) => {
 
-            reader.onload = () => {
-                const img = new Image();
+                const reader =
+                    new FileReader();
 
-                img.onload = () => resolve(img);
+                reader.onload = () => {
 
-                img.onerror = () =>
-                    reject(new Error("The selected image could not be decoded."));
+                    const img =
+                        new Image();
 
-                img.src = reader.result;
-            };
+                    img.onload = () =>
+                        resolve(img);
 
-            reader.onerror = () =>
-                reject(new Error("Could not read the selected image."));
+                    img.onerror = () =>
+                        reject(
+                            new Error(
+                                "The selected image could not be decoded."
+                            )
+                        );
 
-            reader.readAsDataURL(file);
-        });
+                    img.src =
+                        reader.result;
+                };
+
+                reader.onerror = () =>
+                    reject(
+                        new Error(
+                            "Could not read the selected image."
+                        )
+                    );
+
+                reader.readAsDataURL(file);
+            }
+        );
     }
 
     async function imageToGray(file) {
         validateImageFile(file);
 
-        const img = await readImageFile(file);
+        const img =
+            await readImageFile(file);
 
-        let width = img.naturalWidth || img.width;
-        let height = img.naturalHeight || img.height;
+        let width =
+            img.naturalWidth ||
+            img.width;
+
+        let height =
+            img.naturalHeight ||
+            img.height;
 
         const scale =
-            Math.min(1, CONFIG.MAX_IMAGE_DIMENSION / Math.max(width, height));
+            Math.min(
+                1,
+                CONFIG.MAX_IMAGE_DIMENSION /
+                    Math.max(
+                        width,
+                        height
+                    )
+            );
 
-        width = Math.max(1, Math.round(width * scale));
-        height = Math.max(1, Math.round(height * scale));
+        width =
+            Math.max(
+                1,
+                Math.round(
+                    width * scale
+                )
+            );
 
-        const canvas = document.createElement("canvas");
+        height =
+            Math.max(
+                1,
+                Math.round(
+                    height * scale
+                )
+            );
+
+        const canvas =
+            document.createElement(
+                "canvas"
+            );
+
         canvas.width = width;
         canvas.height = height;
 
-        const ctx = canvas.getContext("2d", {
-            willReadFrequently: true
-        });
+        const ctx =
+            canvas.getContext(
+                "2d",
+                {
+                    willReadFrequently:
+                        true
+                }
+            );
 
-        ctx.drawImage(img, 0, 0, width, height);
+        if (!ctx) {
+            throw new Error(
+                "Could not create image processing context."
+            );
+        }
 
-        const data = ctx.getImageData(0, 0, width, height);
+        ctx.drawImage(
+            img,
+            0,
+            0,
+            width,
+            height
+        );
 
-        const gray = new Float32Array(width * height);
+        const data =
+            ctx.getImageData(
+                0,
+                0,
+                width,
+                height
+            );
 
-        for (let i = 0, p = 0; i < data.data.length; i += 4, p++) {
-            const r = data.data[i];
-            const g = data.data[i + 1];
-            const b = data.data[i + 2];
+        const gray =
+            new Float32Array(
+                width * height
+            );
+
+        for (
+            let i = 0, p = 0;
+            i < data.data.length;
+            i += 4, p++
+        ) {
+
+            const r =
+                data.data[i];
+
+            const g =
+                data.data[i + 1];
+
+            const b =
+                data.data[i + 2];
 
             gray[p] =
                 0.299 * r +
@@ -320,33 +782,83 @@
         };
     }
 
-    function resizeGray(image, maxDimension) {
+    /* ----------------------------------------------------------
+       RESIZE
+       ---------------------------------------------------------- */
+
+    function resizeGray(
+        image,
+        maxDimension
+    ) {
         const scale =
-            Math.min(1, maxDimension / Math.max(image.width, image.height));
+            Math.min(
+                1,
+                maxDimension /
+                    Math.max(
+                        image.width,
+                        image.height
+                    )
+            );
 
         if (scale >= 0.999) {
             return image;
         }
 
-        const width = Math.max(1, Math.round(image.width * scale));
-        const height = Math.max(1, Math.round(image.height * scale));
-
-        const result = new Float32Array(width * height);
-
-        for (let y = 0; y < height; y++) {
-            const sy = Math.min(
-                image.height - 1,
-                Math.floor(y / scale)
+        const width =
+            Math.max(
+                1,
+                Math.round(
+                    image.width * scale
+                )
             );
 
-            for (let x = 0; x < width; x++) {
-                const sx = Math.min(
-                    image.width - 1,
-                    Math.floor(x / scale)
+        const height =
+            Math.max(
+                1,
+                Math.round(
+                    image.height * scale
+                )
+            );
+
+        const result =
+            new Float32Array(
+                width * height
+            );
+
+        for (
+            let y = 0;
+            y < height;
+            y++
+        ) {
+
+            const sy =
+                Math.min(
+                    image.height - 1,
+                    Math.floor(
+                        y / scale
+                    )
                 );
 
-                result[y * width + x] =
-                    image.data[sy * image.width + sx];
+            for (
+                let x = 0;
+                x < width;
+                x++
+            ) {
+
+                const sx =
+                    Math.min(
+                        image.width - 1,
+                        Math.floor(
+                            x / scale
+                        )
+                    );
+
+                result[
+                    y * width + x
+                ] =
+                    image.data[
+                        sy * image.width + sx
+                    ];
             }
         }
 
@@ -358,46 +870,92 @@
     }
 
     /* ----------------------------------------------------------
-       IMAGE NORMALIZATION
+       NORMALIZATION
        ---------------------------------------------------------- */
 
-    function percentile(array, q) {
-        if (!array.length) return 0;
+    function percentile(
+        array,
+        q
+    ) {
+        if (!array.length) {
+            return 0;
+        }
 
-        const sorted = Array.from(array).sort((a, b) => a - b);
+        const sorted =
+            Array.from(array)
+                .sort(
+                    (a, b) =>
+                        a - b
+                );
 
         const index =
-            clamp(q, 0, 1) * (sorted.length - 1);
+            clamp(
+                q,
+                0,
+                1
+            ) *
+            (sorted.length - 1);
 
-        const lower = Math.floor(index);
-        const upper = Math.ceil(index);
+        const lower =
+            Math.floor(index);
+
+        const upper =
+            Math.ceil(index);
 
         if (lower === upper) {
             return sorted[lower];
         }
 
-        const weight = index - lower;
+        const weight =
+            index - lower;
 
         return (
-            sorted[lower] * (1 - weight) +
-            sorted[upper] * weight
+            sorted[lower] *
+                (1 - weight) +
+            sorted[upper] *
+                weight
         );
     }
 
     function localNormalize(image) {
-        const data = new Float32Array(image.data.length);
-
-        const p5 = percentile(image.data, 0.05);
-        const p95 = percentile(image.data, 0.95);
-
-        const range = Math.max(1, p95 - p5);
-
-        for (let i = 0; i < image.data.length; i++) {
-            data[i] = clamp(
-                (image.data[i] - p5) / range,
-                0,
-                1
+        const data =
+            new Float32Array(
+                image.data.length
             );
+
+        const p5 =
+            percentile(
+                image.data,
+                0.05
+            );
+
+        const p95 =
+            percentile(
+                image.data,
+                0.95
+            );
+
+        const range =
+            Math.max(
+                1,
+                p95 - p5
+            );
+
+        for (
+            let i = 0;
+            i < image.data.length;
+            i++
+        ) {
+
+            data[i] =
+                clamp(
+                    (
+                        image.data[i] -
+                        p5
+                    ) / range,
+                    0,
+                    1
+                );
         }
 
         return {
@@ -412,7 +970,9 @@
        ---------------------------------------------------------- */
 
     function imageQuality(image) {
-        const data = image.data;
+
+        const data =
+            image.data;
 
         if (!data.length) {
             return {
@@ -422,15 +982,24 @@
             };
         }
 
-        const sampleStep = Math.max(
-            1,
-            Math.floor(data.length / 50000)
-        );
+        const sampleStep =
+            Math.max(
+                1,
+                Math.floor(
+                    data.length / 50000
+                )
+            );
 
         const samples = [];
 
-        for (let i = 0; i < data.length; i += sampleStep) {
-            samples.push(data[i]);
+        for (
+            let i = 0;
+            i < data.length;
+            i += sampleStep
+        ) {
+            samples.push(
+                data[i]
+            );
         }
 
         let mean = 0;
@@ -439,55 +1008,110 @@
             mean += v;
         }
 
-        mean /= samples.length;
+        mean /=
+            samples.length;
 
         let variance = 0;
 
         for (const v of samples) {
-            const d = v - mean;
-            variance += d * d;
+
+            const d =
+                v - mean;
+
+            variance +=
+                d * d;
         }
 
-        variance /= samples.length;
+        variance /=
+            samples.length;
 
         let sharpness = 0;
         let count = 0;
 
-        for (let y = 1; y < image.height - 1; y += 2) {
-            for (let x = 1; x < image.width - 1; x += 2) {
-                const i = y * image.width + x;
+        for (
+            let y = 1;
+            y < image.height - 1;
+            y += 2
+        ) {
+
+            for (
+                let x = 1;
+                x < image.width - 1;
+                x += 2
+            ) {
+
+                const i =
+                    y * image.width + x;
 
                 const lap =
-                    image.data[i - image.width] +
-                    image.data[i + image.width] +
-                    image.data[i - 1] +
-                    image.data[i + 1] -
-                    4 * image.data[i];
+                    image.data[
+                        i - image.width
+                    ] +
+                    image.data[
+                        i + image.width
+                    ] +
+                    image.data[
+                        i - 1
+                    ] +
+                    image.data[
+                        i + 1
+                    ] -
+                    4 *
+                        image.data[i];
 
-                sharpness += lap * lap;
+                sharpness +=
+                    lap * lap;
+
                 count++;
             }
         }
 
-        sharpness = count ? sharpness / count : 0;
+        sharpness =
+            count
+                ? sharpness / count
+                : 0;
 
         const contrastScore =
-            clamp(Math.sqrt(variance) * 3.0, 0, 1);
+            clamp(
+                Math.sqrt(
+                    variance
+                ) * 3.0,
+                0,
+                1
+            );
 
         const sharpnessScore =
-            clamp(Math.log10(sharpness + 1) / 4.0, 0, 1);
+            clamp(
+                Math.log10(
+                    sharpness + 1
+                ) / 4.0,
+                0,
+                1
+            );
 
         const score =
             100 *
             (
-                0.55 * contrastScore +
-                0.45 * sharpnessScore
+                0.55 *
+                    contrastScore +
+                0.45 *
+                    sharpnessScore
             );
 
         return {
-            contrast: Math.sqrt(variance) * 100,
+            contrast:
+                Math.sqrt(
+                    variance
+                ) * 100,
+
             sharpness,
-            score: clamp(score, 0, 100)
+
+            score:
+                clamp(
+                    score,
+                    0,
+                    100
+                )
         };
     }
 
@@ -495,14 +1119,34 @@
        GRADIENT
        ---------------------------------------------------------- */
 
-    function gradientAt(image, x, y) {
-        const w = image.width;
-        const h = image.height;
+    function gradientAt(
+        image,
+        x,
+        y
+    ) {
 
-        x = clamp(Math.round(x), 1, w - 2);
-        y = clamp(Math.round(y), 1, h - 2);
+        const w =
+            image.width;
 
-        const i = y * w + x;
+        const h =
+            image.height;
+
+        x =
+            clamp(
+                Math.round(x),
+                1,
+                w - 2
+            );
+
+        y =
+            clamp(
+                Math.round(y),
+                1,
+                h - 2
+            );
+
+        const i =
+            y * w + x;
 
         const gx =
             image.data[i + 1] -
@@ -515,8 +1159,18 @@
         return {
             gx,
             gy,
-            magnitude: Math.sqrt(gx * gx + gy * gy),
-            angle: Math.atan2(gy, gx)
+
+            magnitude:
+                Math.sqrt(
+                    gx * gx +
+                    gy * gy
+                ),
+
+            angle:
+                Math.atan2(
+                    gy,
+                    gx
+                )
         };
     }
 
@@ -525,87 +1179,152 @@
        ---------------------------------------------------------- */
 
     function detectFeatures(image) {
+
         const candidates = [];
 
-        const w = image.width;
-        const h = image.height;
+        const w =
+            image.width;
 
-        const border = CONFIG.PATCH_RADIUS + 3;
+        const h =
+            image.height;
 
-        const step = Math.max(
-            4,
-            Math.floor(
-                Math.min(w, h) / 100
-            )
-        );
+        const border =
+            CONFIG.PATCH_RADIUS + 3;
+
+        const step =
+            Math.max(
+                4,
+                Math.floor(
+                    Math.min(
+                        w,
+                        h
+                    ) / 100
+                )
+            );
 
         for (
             let y = border;
             y < h - border;
             y += step
         ) {
+
             for (
                 let x = border;
                 x < w - border;
                 x += step
             ) {
-                const g = gradientAt(image, x, y);
 
-                if (g.magnitude < 0.015) {
+                const g =
+                    gradientAt(
+                        image,
+                        x,
+                        y
+                    );
+
+                if (
+                    g.magnitude <
+                    0.015
+                ) {
                     continue;
                 }
 
                 let score = 0;
 
-                for (let dy = -2; dy <= 2; dy++) {
-                    for (let dx = -2; dx <= 2; dx++) {
-                        if (!dx && !dy) continue;
+                for (
+                    let dy = -2;
+                    dy <= 2;
+                    dy++
+                ) {
 
-                        const n = gradientAt(
-                            image,
-                            x + dx,
-                            y + dy
-                        );
+                    for (
+                        let dx = -2;
+                        dx <= 2;
+                        dx++
+                    ) {
 
-                        score += Math.abs(
-                            g.magnitude - n.magnitude
-                        );
+                        if (
+                            !dx &&
+                            !dy
+                        ) {
+                            continue;
+                        }
+
+                        const n =
+                            gradientAt(
+                                image,
+                                x + dx,
+                                y + dy
+                            );
+
+                        score +=
+                            Math.abs(
+                                g.magnitude -
+                                n.magnitude
+                            );
                     }
                 }
 
-                score *= g.magnitude;
+                score *=
+                    g.magnitude;
 
                 candidates.push({
                     x,
                     y,
                     score,
-                    magnitude: g.magnitude,
-                    angle: g.angle
+                    magnitude:
+                        g.magnitude,
+                    angle:
+                        g.angle
                 });
             }
         }
 
         candidates.sort(
-            (a, b) => b.score - a.score
+            (a, b) =>
+                b.score -
+                a.score
         );
 
         const selected = [];
 
         const minDistance =
-            Math.max(6, Math.min(w, h) * 0.025);
+            Math.max(
+                6,
+                Math.min(
+                    w,
+                    h
+                ) * 0.025
+            );
 
         const minDistanceSquared =
-            minDistance * minDistance;
+            minDistance *
+            minDistance;
 
-        for (const feature of candidates) {
-            let tooClose = false;
+        for (
+            const feature
+            of candidates
+        ) {
 
-            for (const existing of selected) {
+            let tooClose =
+                false;
+
+            for (
+                const existing
+                of selected
+            ) {
+
                 if (
                     distanceSquared(
-                        [feature.x, feature.y],
-                        [existing.x, existing.y]
-                    ) < minDistanceSquared
+                        [
+                            feature.x,
+                            feature.y
+                        ],
+                        [
+                            existing.x,
+                            existing.y
+                        ]
+                    ) <
+                    minDistanceSquared
                 ) {
                     tooClose = true;
                     break;
@@ -613,10 +1332,15 @@
             }
 
             if (!tooClose) {
-                selected.push(feature);
+                selected.push(
+                    feature
+                );
             }
 
-            if (selected.length >= CONFIG.MAX_KEYPOINTS) {
+            if (
+                selected.length >=
+                CONFIG.MAX_KEYPOINTS
+            ) {
                 break;
             }
         }
@@ -628,51 +1352,73 @@
        FEATURE DESCRIPTOR
        ---------------------------------------------------------- */
 
-    function describeFeature(image, feature) {
-        const radius = CONFIG.PATCH_RADIUS;
-        const grid = CONFIG.DESCRIPTOR_GRID;
-        const bins = CONFIG.ORIENTATION_BINS;
+    function describeFeature(
+        image,
+        feature
+    ) {
+
+        const radius =
+            CONFIG.PATCH_RADIUS;
+
+        const grid =
+            CONFIG.DESCRIPTOR_GRID;
+
+        const bins =
+            CONFIG.ORIENTATION_BINS;
 
         const descriptor = [];
 
-        const start =
-            -radius;
-
         const cellSize =
-            (radius * 2) / grid;
+            (radius * 2) /
+            grid;
 
-        for (let gy = 0; gy < grid; gy++) {
-            for (let gx = 0; gx < grid; gx++) {
+        for (
+            let gy = 0;
+            gy < grid;
+            gy++
+        ) {
+
+            for (
+                let gx = 0;
+                gx < grid;
+                gx++
+            ) {
 
                 const hist =
-                    new Float32Array(bins);
+                    new Float32Array(
+                        bins
+                    );
 
                 const x0 =
                     Math.floor(
                         feature.x -
                         radius +
-                        gx * cellSize
+                        gx *
+                            cellSize
                     );
 
                 const y0 =
                     Math.floor(
                         feature.y -
                         radius +
-                        gy * cellSize
+                        gy *
+                            cellSize
                     );
 
                 const x1 =
                     Math.floor(
                         feature.x -
                         radius +
-                        (gx + 1) * cellSize
+                        (gx + 1) *
+                            cellSize
                     );
 
                 const y1 =
                     Math.floor(
                         feature.y -
                         radius +
-                        (gy + 1) * cellSize
+                        (gy + 1) *
+                            cellSize
                     );
 
                 for (
@@ -680,16 +1426,22 @@
                     y < y1;
                     y++
                 ) {
+
                     for (
                         let x = x0;
                         x < x1;
                         x++
                     ) {
+
                         if (
                             x < 1 ||
                             y < 1 ||
-                            x >= image.width - 1 ||
-                            y >= image.height - 1
+                            x >=
+                                image.width -
+                                    1 ||
+                            y >=
+                                image.height -
+                                    1
                         ) {
                             continue;
                         }
@@ -708,50 +1460,82 @@
                             g.angle -
                             feature.angle;
 
-                        while (angle < 0) {
-                            angle += Math.PI * 2;
+                        while (
+                            angle < 0
+                        ) {
+                            angle +=
+                                Math.PI * 2;
                         }
 
-                        while (angle >= Math.PI * 2) {
-                            angle -= Math.PI * 2;
+                        while (
+                            angle >=
+                            Math.PI * 2
+                        ) {
+                            angle -=
+                                Math.PI * 2;
                         }
 
-                        const bin = Math.floor(
-                            angle /
-                            (Math.PI * 2 / bins)
-                        ) % bins;
+                        const bin =
+                            Math.floor(
+                                angle /
+                                    (
+                                        Math.PI *
+                                        2 /
+                                        bins
+                                    )
+                            ) % bins;
 
-                        hist[bin] += magnitude;
+                        hist[bin] +=
+                            magnitude;
                     }
                 }
 
-                for (let b = 0; b < bins; b++) {
-                    descriptor.push(hist[b]);
+                for (
+                    let b = 0;
+                    b < bins;
+                    b++
+                ) {
+                    descriptor.push(
+                        hist[b]
+                    );
                 }
             }
         }
 
         let norm = 0;
 
-        for (const v of descriptor) {
+        for (
+            const v of descriptor
+        ) {
             norm += v * v;
         }
 
-        norm = Math.sqrt(norm) || 1;
+        norm =
+            Math.sqrt(norm) ||
+            1;
 
-        for (let i = 0; i < descriptor.length; i++) {
-            descriptor[i] =
-                descriptor[i] / norm;
+        for (
+            let i = 0;
+            i < descriptor.length;
+            i++
+        ) {
+            descriptor[i] /=
+                norm;
         }
 
         return descriptor;
     }
 
     function extractFeatures(image) {
+
         const features =
             detectFeatures(image);
 
-        for (const feature of features) {
+        for (
+            const feature
+            of features
+        ) {
+
             feature.descriptor =
                 describeFeature(
                     image,
@@ -766,79 +1550,134 @@
        DESCRIPTOR MATCHING
        ---------------------------------------------------------- */
 
-    function descriptorDistance(a, b) {
+    function descriptorDistance(
+        a,
+        b
+    ) {
+
         let sum = 0;
 
         const n =
-            Math.min(a.length, b.length);
+            Math.min(
+                a.length,
+                b.length
+            );
 
-        for (let i = 0; i < n; i++) {
-            const d = a[i] - b[i];
-            sum += d * d;
+        for (
+            let i = 0;
+            i < n;
+            i++
+        ) {
+
+            const d =
+                a[i] - b[i];
+
+            sum +=
+                d * d;
         }
 
-        return Math.sqrt(sum / n);
+        return Math.sqrt(
+            sum / n
+        );
     }
 
-    function matchFeatures(featuresA, featuresB) {
+    function matchFeatures(
+        featuresA,
+        featuresB
+    ) {
+
         const matches = [];
 
         const reverseBest =
             new Map();
 
-        /* First determine best B -> A matches. */
+        for (
+            let j = 0;
+            j < featuresB.length;
+            j++
+        ) {
 
-        for (let j = 0; j < featuresB.length; j++) {
             let bestIndex = -1;
-            let bestDistance = Infinity;
+            let bestDistance =
+                Infinity;
 
-            for (let i = 0; i < featuresA.length; i++) {
+            for (
+                let i = 0;
+                i < featuresA.length;
+                i++
+            ) {
+
                 const d =
                     descriptorDistance(
                         featuresB[j].descriptor,
                         featuresA[i].descriptor
                     );
 
-                if (d < bestDistance) {
+                if (
+                    d <
+                    bestDistance
+                ) {
                     bestDistance = d;
                     bestIndex = i;
                 }
             }
 
-            if (bestIndex >= 0) {
+            if (
+                bestIndex >= 0
+            ) {
+
                 reverseBest.set(
                     j,
                     {
-                        index: bestIndex,
-                        distance: bestDistance
+                        index:
+                            bestIndex,
+                        distance:
+                            bestDistance
                     }
                 );
             }
         }
 
-        /* Then A -> B using Lowe ratio + mutual consistency. */
+        for (
+            let i = 0;
+            i < featuresA.length;
+            i++
+        ) {
 
-        for (let i = 0; i < featuresA.length; i++) {
             let best = null;
             let second = null;
 
-            for (let j = 0; j < featuresB.length; j++) {
+            for (
+                let j = 0;
+                j < featuresB.length;
+                j++
+            ) {
+
                 const d =
                     descriptorDistance(
                         featuresA[i].descriptor,
                         featuresB[j].descriptor
                     );
 
-                if (!best || d < best.distance) {
+                if (
+                    !best ||
+                    d <
+                        best.distance
+                ) {
+
                     second = best;
+
                     best = {
                         index: j,
                         distance: d
                     };
+
                 } else if (
                     !second ||
-                    d < second.distance
+                    d <
+                        second.distance
                 ) {
+
                     second = {
                         index: j,
                         distance: d
@@ -846,7 +1685,9 @@
                 }
             }
 
-            if (!best) continue;
+            if (!best) {
+                continue;
+            }
 
             const secondDistance =
                 second
@@ -861,7 +1702,9 @@
                 );
 
             const reverse =
-                reverseBest.get(best.index);
+                reverseBest.get(
+                    best.index
+                );
 
             const mutual =
                 reverse &&
@@ -869,29 +1712,36 @@
 
             if (
                 (
-                    ratio <= CONFIG.LOWE_RATIO &&
+                    ratio <=
+                        CONFIG.LOWE_RATIO &&
                     best.distance <=
                         CONFIG.MAX_DESCRIPTOR_DISTANCE
                 ) ||
                 (
                     mutual &&
-                    ratio <= CONFIG.RELAXED_RATIO &&
+                    ratio <=
+                        CONFIG.RELAXED_RATIO &&
                     best.distance <=
                         CONFIG.RELAXED_DESCRIPTOR_DISTANCE
                 )
             ) {
+
                 matches.push({
                     indexA: i,
-                    indexB: best.index,
-                    distance: best.distance,
+                    indexB:
+                        best.index,
+                    distance:
+                        best.distance,
                     ratio,
-                    mutual: !!mutual
+                    mutual:
+                        !!mutual
                 });
             }
         }
 
         matches.sort(
             (a, b) => {
+
                 const scoreA =
                     a.distance +
                     a.ratio * 0.25;
@@ -914,39 +1764,64 @@
        ROBUST MATCHING
        ---------------------------------------------------------- */
 
-    function robustMatch(featuresA, featuresB) {
+    function robustMatch(
+        featuresA,
+        featuresB
+    ) {
+
         let matches =
             matchFeatures(
                 featuresA,
                 featuresB
             );
 
-        /* If too few matches survive, try a relaxed pass. */
+        if (
+            matches.length <
+            CONFIG.MIN_CANDIDATES_FOR_GEOMETRY
+        ) {
 
-        if (matches.length < CONFIG.MIN_CANDIDATES_FOR_GEOMETRY) {
             const relaxed = [];
 
-            for (let i = 0; i < featuresA.length; i++) {
+            for (
+                let i = 0;
+                i < featuresA.length;
+                i++
+            ) {
+
                 let best = null;
                 let second = null;
 
-                for (let j = 0; j < featuresB.length; j++) {
+                for (
+                    let j = 0;
+                    j < featuresB.length;
+                    j++
+                ) {
+
                     const d =
                         descriptorDistance(
                             featuresA[i].descriptor,
                             featuresB[j].descriptor
                         );
 
-                    if (!best || d < best.distance) {
+                    if (
+                        !best ||
+                        d <
+                            best.distance
+                    ) {
+
                         second = best;
+
                         best = {
                             index: j,
                             distance: d
                         };
+
                     } else if (
                         !second ||
-                        d < second.distance
+                        d <
+                            second.distance
                     ) {
+
                         second = {
                             index: j,
                             distance: d
@@ -954,7 +1829,9 @@
                     }
                 }
 
-                if (!best) continue;
+                if (!best) {
+                    continue;
+                }
 
                 const ratio =
                     best.distance /
@@ -966,29 +1843,36 @@
                     );
 
                 if (
-                    ratio <= CONFIG.RELAXED_RATIO &&
+                    ratio <=
+                        CONFIG.RELAXED_RATIO &&
                     best.distance <=
                         CONFIG.RELAXED_DESCRIPTOR_DISTANCE
                 ) {
+
                     relaxed.push({
                         indexA: i,
-                        indexB: best.index,
-                        distance: best.distance,
+                        indexB:
+                            best.index,
+                        distance:
+                            best.distance,
                         ratio,
-                        mutual: false
+                        mutual:
+                            false
                     });
                 }
             }
 
             relaxed.sort(
                 (a, b) =>
-                    a.distance - b.distance
+                    a.distance -
+                    b.distance
             );
 
-            matches = relaxed.slice(
-                0,
-                CONFIG.MAX_MATCH_FEATURES
-            );
+            matches =
+                relaxed.slice(
+                    0,
+                    CONFIG.MAX_MATCH_FEATURES
+                );
         }
 
         return matches;
@@ -999,27 +1883,36 @@
        ---------------------------------------------------------- */
 
     function solveAffine(points) {
-        if (!points || points.length < 3) {
+
+        if (
+            !points ||
+            points.length < 3
+        ) {
             return null;
         }
 
         const A = [];
         const B = [];
 
-        for (const p of points) {
+        for (
+            const p of points
+        ) {
+
             const x = p.x;
             const y = p.y;
             const X = p.X;
             const Y = p.Y;
 
             A.push([
-                x, y, 1, 0, 0, 0
+                x, y, 1,
+                0, 0, 0
             ]);
 
             B.push(X);
 
             A.push([
-                0, 0, 0, x, y, 1
+                0, 0, 0,
+                x, y, 1
             ]);
 
             B.push(Y);
@@ -1027,34 +1920,59 @@
 
         const ATA =
             Array.from(
-                { length: 6 },
-                () => Array(6).fill(0)
+                {
+                    length: 6
+                },
+                () =>
+                    Array(6).fill(0)
             );
 
         const ATB =
             Array(6).fill(0);
 
-        for (let r = 0; r < A.length; r++) {
-            for (let c = 0; c < 6; c++) {
-                ATB[c] +=
-                    A[r][c] * B[r];
+        for (
+            let r = 0;
+            r < A.length;
+            r++
+        ) {
 
-                for (let k = 0; k < 6; k++) {
+            for (
+                let c = 0;
+                c < 6;
+                c++
+            ) {
+
+                ATB[c] +=
+                    A[r][c] *
+                    B[r];
+
+                for (
+                    let k = 0;
+                    k < 6;
+                    k++
+                ) {
+
                     ATA[c][k] +=
-                        A[r][c] * A[r][k];
+                        A[r][c] *
+                        A[r][k];
                 }
             }
         }
 
-        /* Gaussian elimination */
-
         const M =
             ATA.map(
                 (row, i) =>
-                    row.concat(ATB[i])
+                    row.concat(
+                        ATB[i]
+                    )
             );
 
-        for (let col = 0; col < 6; col++) {
+        for (
+            let col = 0;
+            col < 6;
+            col++
+        ) {
+
             let pivot = col;
 
             for (
@@ -1062,23 +1980,34 @@
                 row < 6;
                 row++
             ) {
+
                 if (
-                    Math.abs(M[row][col]) >
-                    Math.abs(M[pivot][col])
+                    Math.abs(
+                        M[row][col]
+                    ) >
+                    Math.abs(
+                        M[pivot][col]
+                    )
                 ) {
                     pivot = row;
                 }
             }
 
             if (
-                Math.abs(M[pivot][col]) <
-                1e-10
+                Math.abs(
+                    M[pivot][col]
+                ) < 1e-10
             ) {
                 return null;
             }
 
-            [M[col], M[pivot]] =
-                [M[pivot], M[col]];
+            [
+                M[col],
+                M[pivot]
+            ] = [
+                M[pivot],
+                M[col]
+            ];
 
             const div =
                 M[col][col];
@@ -1088,7 +2017,8 @@
                 j <= 6;
                 j++
             ) {
-                M[col][j] /= div;
+                M[col][j] /=
+                    div;
             }
 
             for (
@@ -1096,7 +2026,12 @@
                 row < 6;
                 row++
             ) {
-                if (row === col) continue;
+
+                if (
+                    row === col
+                ) {
+                    continue;
+                }
 
                 const factor =
                     M[row][col];
@@ -1106,14 +2041,18 @@
                     j <= 6;
                     j++
                 ) {
+
                     M[row][j] -=
-                        factor * M[col][j];
+                        factor *
+                        M[col][j];
                 }
             }
         }
 
         const x =
-            M.map(row => row[6]);
+            M.map(
+                row => row[6]
+            );
 
         return {
             a: x[0],
@@ -1125,7 +2064,12 @@
         };
     }
 
-    function transform(model, x, y) {
+    function transform(
+        model,
+        x,
+        y
+    ) {
+
         return {
             x:
                 model.a * x +
@@ -1140,15 +2084,23 @@
     }
 
     /* ----------------------------------------------------------
-       GEOMETRY HELPERS
+       GEOMETRY
        ---------------------------------------------------------- */
 
-    function triangleArea(a, b, c) {
+    function triangleArea(
+        a,
+        b,
+        c
+    ) {
+
         return Math.abs(
             (
-                a.x * (b.y - c.y) +
-                b.x * (c.y - a.y) +
-                c.x * (a.y - b.y)
+                a.x *
+                    (b.y - c.y) +
+                b.x *
+                    (c.y - a.y) +
+                c.x *
+                    (a.y - b.y)
             ) / 2
         );
     }
@@ -1158,27 +2110,48 @@
         featuresB,
         matches
     ) {
+
         if (
             matches.length <
             CONFIG.MIN_CANDIDATES_FOR_GEOMETRY
         ) {
+
             return {
                 model: null,
                 inliers: [],
                 inlierRatio: 0,
                 consistency: 0,
-                status: "INSUFFICIENT MATCHES"
+                status:
+                    "INSUFFICIENT MATCHES"
             };
         }
 
         const usable =
-            matches.map(m => ({
-                x: featuresA[m.indexA].x,
-                y: featuresA[m.indexA].y,
-                X: featuresB[m.indexB].x,
-                Y: featuresB[m.indexB].y,
-                match: m
-            }));
+            matches.map(
+                m => ({
+                    x:
+                        featuresA[
+                            m.indexA
+                        ].x,
+
+                    y:
+                        featuresA[
+                            m.indexA
+                        ].y,
+
+                    X:
+                        featuresB[
+                            m.indexB
+                        ].x,
+
+                    Y:
+                        featuresB[
+                            m.indexB
+                        ].y,
+
+                    match: m
+                })
+            );
 
         let bestModel = null;
         let bestInliers = [];
@@ -1188,7 +2161,8 @@
                 CONFIG.RANSAC_ITERATIONS,
                 Math.max(
                     250,
-                    usable.length * 25
+                    usable.length *
+                        25
                 )
             );
 
@@ -1197,22 +2171,34 @@
             iter < iterations;
             iter++
         ) {
+
             const chosen = [];
 
-            while (chosen.length < 3) {
+            while (
+                chosen.length < 3
+            ) {
+
                 const index =
                     Math.floor(
                         Math.random() *
-                        usable.length
+                            usable.length
                     );
 
-                if (!chosen.includes(index)) {
-                    chosen.push(index);
+                if (
+                    !chosen.includes(
+                        index
+                    )
+                ) {
+                    chosen.push(
+                        index
+                    );
                 }
             }
 
             const points =
-                chosen.map(i => usable[i]);
+                chosen.map(
+                    i => usable[i]
+                );
 
             if (
                 triangleArea(
@@ -1227,12 +2213,20 @@
             const model =
                 solveAffine(points);
 
-            if (!model) continue;
+            if (!model) {
+                continue;
+            }
 
             const inliers = [];
 
-            for (let i = 0; i < usable.length; i++) {
-                const p = usable[i];
+            for (
+                let i = 0;
+                i < usable.length;
+                i++
+            ) {
+
+                const p =
+                    usable[i];
 
                 const predicted =
                     transform(
@@ -1242,10 +2236,12 @@
                     );
 
                 const dx =
-                    predicted.x - p.X;
+                    predicted.x -
+                    p.X;
 
                 const dy =
-                    predicted.y - p.Y;
+                    predicted.y -
+                    p.Y;
 
                 const error =
                     Math.sqrt(
@@ -1257,6 +2253,7 @@
                     error <=
                     CONFIG.RANSAC_ERROR_PIXELS
                 ) {
+
                     inliers.push({
                         index: i,
                         error
@@ -1268,8 +2265,12 @@
                 inliers.length >
                 bestInliers.length
             ) {
-                bestModel = model;
-                bestInliers = inliers;
+
+                bestModel =
+                    model;
+
+                bestInliers =
+                    inliers;
 
                 const ratio =
                     bestInliers.length /
@@ -1285,34 +2286,46 @@
         }
 
         if (!bestModel) {
+
             return {
                 model: null,
                 inliers: [],
                 inlierRatio: 0,
                 consistency: 0,
-                status: "NO VALID GEOMETRY"
+                status:
+                    "NO VALID GEOMETRY"
             };
         }
 
-        /* Refine model using all inliers. */
-
         const refinedPoints =
             bestInliers.map(
-                item => usable[item.index]
+                item =>
+                    usable[
+                        item.index
+                    ]
             );
 
         const refinedModel =
             refinedPoints.length >= 3
-                ? solveAffine(refinedPoints)
+                ? solveAffine(
+                      refinedPoints
+                  )
                 : bestModel;
 
         const model =
-            refinedModel || bestModel;
+            refinedModel ||
+            bestModel;
 
-        let finalInliers = [];
+        const finalInliers = [];
 
-        for (let i = 0; i < usable.length; i++) {
-            const p = usable[i];
+        for (
+            let i = 0;
+            i < usable.length;
+            i++
+        ) {
+
+            const p =
+                usable[i];
 
             const predicted =
                 transform(
@@ -1322,10 +2335,12 @@
                 );
 
             const dx =
-                predicted.x - p.X;
+                predicted.x -
+                p.X;
 
             const dy =
-                predicted.y - p.Y;
+                predicted.y -
+                p.Y;
 
             const error =
                 Math.sqrt(
@@ -1337,6 +2352,7 @@
                 error <=
                 CONFIG.RANSAC_ERROR_PIXELS
             ) {
+
                 finalInliers.push({
                     index: i,
                     error
@@ -1346,13 +2362,20 @@
 
         const inlierRatio =
             finalInliers.length /
-            Math.max(1, usable.length);
+            Math.max(
+                1,
+                usable.length
+            );
 
         const meanError =
             finalInliers.length
                 ? finalInliers.reduce(
-                      (sum, item) =>
-                          sum + item.error,
+                      (
+                          sum,
+                          item
+                      ) =>
+                          sum +
+                          item.error,
                       0
                   ) /
                   finalInliers.length
@@ -1361,13 +2384,13 @@
         const consistency =
             clamp(
                 inlierRatio *
-                Math.exp(
-                    -meanError /
-                    Math.max(
-                        1,
-                        CONFIG.RANSAC_ERROR_PIXELS
-                    )
-                ),
+                    Math.exp(
+                        -meanError /
+                            Math.max(
+                                1,
+                                CONFIG.RANSAC_ERROR_PIXELS
+                            )
+                    ),
                 0,
                 1
             );
@@ -1379,13 +2402,15 @@
             finalInliers.length <
             CONFIG.MIN_VERIFIED_MATCHES
         ) {
+
             status =
                 "VERIFICATION INSUFFICIENT INLIERS";
         }
 
         return {
             model,
-            inliers: finalInliers,
+            inliers:
+                finalInliers,
             inlierRatio,
             consistency,
             status,
@@ -1402,43 +2427,61 @@
         featuresB,
         verifiedMatches
     ) {
-        if (!verifiedMatches.length) {
+
+        if (
+            !verifiedMatches.length
+        ) {
             return 0;
         }
 
-        const cells = new Set();
+        const cells =
+            new Set();
 
-        const rows = CONFIG.GRID_ROWS;
-        const cols = CONFIG.GRID_COLS;
+        const rows =
+            CONFIG.GRID_ROWS;
 
-        for (const item of verifiedMatches) {
-            const p = featuresA[item.match.indexA];
+        const cols =
+            CONFIG.GRID_COLS;
 
-            const col = clamp(
-                Math.floor(
-                    p.x /
-                    Math.max(
-                        1,
-                        featuresA.imageWidth || 1
-                    ) *
-                    cols
-                ),
-                0,
-                cols - 1
-            );
+        for (
+            const item
+            of verifiedMatches
+        ) {
 
-            const row = clamp(
-                Math.floor(
-                    p.y /
-                    Math.max(
-                        1,
-                        featuresA.imageHeight || 1
-                    ) *
-                    rows
-                ),
-                0,
-                rows - 1
-            );
+            const p =
+                featuresA[
+                    item.match.indexA
+                ];
+
+            const col =
+                clamp(
+                    Math.floor(
+                        p.x /
+                            Math.max(
+                                1,
+                                featuresA.imageWidth ||
+                                    1
+                            ) *
+                            cols
+                    ),
+                    0,
+                    cols - 1
+                );
+
+            const row =
+                clamp(
+                    Math.floor(
+                        p.y /
+                            Math.max(
+                                1,
+                                featuresA.imageHeight ||
+                                    1
+                            ) *
+                            rows
+                    ),
+                    0,
+                    rows - 1
+                );
 
             cells.add(
                 `${row}:${col}`
@@ -1447,7 +2490,7 @@
 
         return clamp(
             cells.size /
-            (rows * cols),
+                (rows * cols),
             0,
             1
         );
@@ -1461,6 +2504,7 @@
         matches,
         verified
     ) {
+
         if (!matches.length) {
             return 0;
         }
@@ -1484,27 +2528,35 @@
 
         const averageDistance =
             good.reduce(
-                (sum, item) =>
-                    sum + item.distance,
+                (
+                    sum,
+                    item
+                ) =>
+                    sum +
+                    item.distance,
                 0
-            ) / good.length;
+            ) /
+            good.length;
 
         const descriptorQuality =
             clamp(
                 1 -
-                averageDistance /
-                CONFIG.RELAXED_DESCRIPTOR_DISTANCE,
+                    averageDistance /
+                        CONFIG.RELAXED_DESCRIPTOR_DISTANCE,
                 0,
                 1
             );
 
         const ratioQuality =
             good.reduce(
-                (sum, item) =>
+                (
+                    sum,
+                    item
+                ) =>
                     sum +
                     clamp(
                         1 -
-                        item.ratio,
+                            item.ratio,
                         0,
                         1
                     ),
@@ -1513,8 +2565,10 @@
             good.length;
 
         return clamp(
-            0.65 * descriptorQuality +
-            0.35 * ratioQuality,
+            0.65 *
+                descriptorQuality +
+                0.35 *
+                ratioQuality,
             0,
             1
         );
@@ -1534,6 +2588,7 @@
         coverage,
         matchQuality
     }) {
+
         const imageQualityScore =
             (
                 qualityA +
@@ -1543,10 +2598,10 @@
         const evidenceScore =
             clamp(
                 verifiedMatches /
-                Math.max(
-                    CONFIG.MIN_VERIFIED_MATCHES,
-                    12
-                ),
+                    Math.max(
+                        CONFIG.MIN_VERIFIED_MATCHES,
+                        12
+                    ),
                 0,
                 1
             );
@@ -1554,12 +2609,18 @@
         const score =
             100 *
             (
-                0.12 * imageQualityScore +
-                0.30 * inlierRatio +
-                0.25 * geometryConsistency +
-                0.13 * coverage +
-                0.15 * matchQuality +
-                0.05 * evidenceScore
+                0.12 *
+                    imageQualityScore +
+                0.30 *
+                    inlierRatio +
+                0.25 *
+                    geometryConsistency +
+                0.13 *
+                    coverage +
+                0.15 *
+                    matchQuality +
+                0.05 *
+                    evidenceScore
             );
 
         return clamp(
@@ -1581,11 +2642,6 @@
         coverage,
         matchQuality
     }) {
-        /*
-         * Confidence is evidence-based.
-         * It is NOT artificially increased just to make
-         * the result look better.
-         */
 
         const evidence =
             clamp(
@@ -1597,31 +2653,47 @@
         const confidence =
             100 *
             (
-                0.24 * evidence +
-                0.24 * inlierRatio +
-                0.22 * geometryConsistency +
-                0.15 * coverage +
-                0.15 * matchQuality
+                0.24 *
+                    evidence +
+                0.24 *
+                    inlierRatio +
+                0.22 *
+                    geometryConsistency +
+                0.15 *
+                    coverage +
+                0.15 *
+                    matchQuality
             );
 
         const finalConfidence =
             clamp(
-                0.75 * confidence +
-                0.25 * score,
+                0.75 *
+                    confidence +
+                    0.25 *
+                    score,
                 0,
                 100
             );
 
         let label = "LOW";
 
-        if (finalConfidence >= 75) {
+        if (
+            finalConfidence >=
+            75
+        ) {
             label = "HIGH";
-        } else if (finalConfidence >= 50) {
+        } else if (
+            finalConfidence >=
+            50
+        ) {
             label = "MEDIUM";
         }
 
         return {
-            value: Math.round(finalConfidence),
+            value:
+                Math.round(
+                    finalConfidence
+                ),
             label
         };
     }
@@ -1630,14 +2702,16 @@
        INTERPRETATION
        ---------------------------------------------------------- */
 
-    function buildInterpretation(result) {
+    function buildInterpretation(
+        result
+    ) {
+
         const {
             score,
             confidence,
             verifiedMatches,
             inlierRatio,
-            geometryConsistency,
-            coverage
+            geometryConsistency
         } = result;
 
         if (
@@ -1645,6 +2719,7 @@
             inlierRatio >= 0.60 &&
             geometryConsistency >= 0.50
         ) {
+
             return (
                 `STRONG CORRESPONDENCE DETECTED. ` +
                 `${verifiedMatches} geometrically verified features ` +
@@ -1658,6 +2733,7 @@
             verifiedMatches >= 6 &&
             inlierRatio >= 0.45
         ) {
+
             return (
                 `PROMISING CORRESPONDENCE. ` +
                 `The engine identified ${verifiedMatches} verified ` +
@@ -1671,6 +2747,7 @@
             verifiedMatches >= 3 &&
             geometryConsistency >= 0.35
         ) {
+
             return (
                 `WEAK BUT POSSIBLE CORRESPONDENCE. ` +
                 `Some compatible image structure was detected, but the ` +
@@ -1697,57 +2774,81 @@
         featuresB,
         verifiedMatches
     ) {
+
         const container =
             $("correspondenceMap");
 
         const placeholder =
             $("correspondencePlaceholder");
 
-        if (!container) return;
+        if (!container) {
+            return;
+        }
 
         container.innerHTML = "";
-        container.style.display = "block";
+        container.style.display =
+            "block";
 
         if (placeholder) {
-            placeholder.style.display = "none";
+            placeholder.style.display =
+                "none";
         }
 
         const canvas =
-            document.createElement("canvas");
+            document.createElement(
+                "canvas"
+            );
 
         canvas.width = 1000;
         canvas.height = 500;
 
-        canvas.style.width = "100%";
-        canvas.style.height = "auto";
+        canvas.style.width =
+            "100%";
 
-        container.appendChild(canvas);
+        canvas.style.height =
+            "auto";
+
+        container.appendChild(
+            canvas
+        );
 
         const ctx =
             canvas.getContext("2d");
+
+        if (!ctx) return;
 
         const halfWidth =
             canvas.width / 2;
 
         const scaleA =
             Math.min(
-                halfWidth / imageA.width,
-                canvas.height / imageA.height
+                halfWidth /
+                    imageA.width,
+                canvas.height /
+                    imageA.height
             );
 
         const scaleB =
             Math.min(
-                halfWidth / imageB.width,
-                canvas.height / imageB.height
+                halfWidth /
+                    imageB.width,
+                canvas.height /
+                    imageB.height
             );
 
         const offsetAY =
-            (canvas.height -
-                imageA.height * scaleA) / 2;
+            (
+                canvas.height -
+                imageA.height *
+                    scaleA
+            ) / 2;
 
         const offsetBY =
-            (canvas.height -
-                imageB.height * scaleB) / 2;
+            (
+                canvas.height -
+                imageB.height *
+                    scaleB
+            ) / 2;
 
         function drawGray(
             image,
@@ -1755,14 +2856,24 @@
             scale,
             yOffset
         ) {
-            const temp =
-                document.createElement("canvas");
 
-            temp.width = image.width;
-            temp.height = image.height;
+            const temp =
+                document.createElement(
+                    "canvas"
+                );
+
+            temp.width =
+                image.width;
+
+            temp.height =
+                image.height;
 
             const tctx =
-                temp.getContext("2d");
+                temp.getContext(
+                    "2d"
+                );
+
+            if (!tctx) return;
 
             const pixels =
                 tctx.createImageData(
@@ -1772,9 +2883,11 @@
 
             for (
                 let i = 0, p = 0;
-                i < pixels.data.length;
+                i <
+                pixels.data.length;
                 i += 4, p++
             ) {
+
                 const value =
                     Math.round(
                         clamp(
@@ -1784,10 +2897,17 @@
                         )
                     );
 
-                pixels.data[i] = value;
-                pixels.data[i + 1] = value;
-                pixels.data[i + 2] = value;
-                pixels.data[i + 3] = 255;
+                pixels.data[i] =
+                    value;
+
+                pixels.data[i + 1] =
+                    value;
+
+                pixels.data[i + 2] =
+                    value;
+
+                pixels.data[i + 3] =
+                    255;
             }
 
             tctx.putImageData(
@@ -1800,8 +2920,10 @@
                 temp,
                 xOffset,
                 yOffset,
-                image.width * scale,
-                image.height * scale
+                image.width *
+                    scale,
+                image.height *
+                    scale
             );
         }
 
@@ -1821,18 +2943,25 @@
 
         for (
             let i = 0;
-            i < verifiedMatches.length &&
-            i < CONFIG.MAX_VISUAL_MATCHES;
+            i <
+                verifiedMatches.length &&
+            i <
+                CONFIG.MAX_VISUAL_MATCHES;
             i++
         ) {
+
             const item =
                 verifiedMatches[i];
 
             const fa =
-                featuresA[item.match.indexA];
+                featuresA[
+                    item.match.indexA
+                ];
 
             const fb =
-                featuresB[item.match.indexB];
+                featuresB[
+                    item.match.indexB
+                ];
 
             const ax =
                 fa.x * scaleA;
@@ -1850,21 +2979,31 @@
                 fb.y * scaleB;
 
             ctx.beginPath();
-            ctx.moveTo(ax, ay);
-            ctx.lineTo(bx, by);
+
+            ctx.moveTo(
+                ax,
+                ay
+            );
+
+            ctx.lineTo(
+                bx,
+                by
+            );
 
             ctx.globalAlpha =
                 0.18 +
                 0.55 *
-                clamp(
-                    1 -
-                    item.error /
-                    CONFIG.RANSAC_ERROR_PIXELS,
-                    0,
-                    1
-                );
+                    clamp(
+                        1 -
+                            item.error /
+                                CONFIG.RANSAC_ERROR_PIXELS,
+                        0,
+                        1
+                    );
 
-            ctx.strokeStyle = "#ffffff";
+            ctx.strokeStyle =
+                "#ffffff";
+
             ctx.lineWidth = 1;
 
             ctx.stroke();
@@ -1872,6 +3011,7 @@
             ctx.globalAlpha = 1;
 
             ctx.beginPath();
+
             ctx.arc(
                 ax,
                 ay,
@@ -1880,10 +3020,13 @@
                 Math.PI * 2
             );
 
-            ctx.fillStyle = "#ffffff";
+            ctx.fillStyle =
+                "#ffffff";
+
             ctx.fill();
 
             ctx.beginPath();
+
             ctx.arc(
                 bx,
                 by,
@@ -1892,7 +3035,9 @@
                 Math.PI * 2
             );
 
-            ctx.fillStyle = "#ffffff";
+            ctx.fillStyle =
+                "#ffffff";
+
             ctx.fill();
         }
 
@@ -1903,7 +3048,10 @@
        DISPLAY RESULTS
        ---------------------------------------------------------- */
 
-    function displayResults(result) {
+    function displayResults(
+        result
+    ) {
+
         setText(
             "overallScore",
             `${result.score}%`
@@ -1921,12 +3069,17 @@
 
         setText(
             "imageQuality",
-            `${round(result.averageQuality, 1)}%`
+            `${round(
+                result.averageQuality,
+                1
+            )}%`
         );
 
         setText(
             "processTime",
-            formatTime(result.processTime)
+            formatTime(
+                result.processTime
+            )
         );
 
         setText(
@@ -1941,22 +3094,36 @@
 
         setText(
             "featureCoverage",
-            `${round(result.coverage * 100, 1)}%`
+            `${round(
+                result.coverage * 100,
+                1
+            )}%`
         );
 
         setText(
             "correspondenceStrength",
-            `${round(result.correspondenceStrength * 100, 1)}%`
+            `${round(
+                result.correspondenceStrength *
+                    100,
+                1
+            )}%`
         );
 
         setText(
             "inlierRatio",
-            `${round(result.inlierRatio * 100, 1)}%`
+            `${round(
+                result.inlierRatio * 100,
+                1
+            )}%`
         );
 
         setText(
             "geometricConsistency",
-            `${round(result.geometryConsistency * 100, 1)}%`
+            `${round(
+                result.geometryConsistency *
+                    100,
+                1
+            )}%`
         );
 
         setText(
@@ -1974,7 +3141,9 @@
 
         if (interpretation) {
             interpretation.textContent =
-                buildInterpretation(result);
+                buildInterpretation(
+                    result
+                );
         }
 
         createCorrespondenceMap(
@@ -1991,10 +3160,12 @@
        ---------------------------------------------------------- */
 
     async function analyzeImages() {
+
         if (
             !state.imageAFile ||
             !state.imageBFile
         ) {
+
             setText(
                 "status",
                 "PLEASE UPLOAD BOTH IMAGES."
@@ -2010,16 +3181,20 @@
             $("analyzeBtn");
 
         if (analyzeButton) {
-            analyzeButton.disabled = true;
+            analyzeButton.disabled =
+                true;
         }
 
         resetPipeline();
         resetResults();
 
         try {
+
             /* ACQUIRE */
 
-            setPipelineActive("stageAcquire");
+            setPipelineActive(
+                "stageAcquire"
+            );
 
             setText(
                 "status",
@@ -2126,10 +3301,11 @@
 
             if (
                 featuresA.length <
-                CONFIG.MIN_FEATURES_FOR_ANALYSIS ||
+                    CONFIG.MIN_FEATURES_FOR_ANALYSIS ||
                 featuresB.length <
-                CONFIG.MIN_FEATURES_FOR_ANALYSIS
+                    CONFIG.MIN_FEATURES_FOR_ANALYSIS
             ) {
+
                 throw new Error(
                     "Insufficient visual features detected in one or both images."
                 );
@@ -2193,21 +3369,27 @@
             );
 
             const verified =
-                geometry.inliers.map(
-                    item =>
-                        matches[
-                            item.index
-                        ]
-                            ? {
-                                  match:
-                                      matches[
-                                          item.index
-                                      ],
-                                  error:
-                                      item.error
-                              }
-                            : null
-                ).filter(Boolean);
+                geometry.inliers
+                    .map(
+                        item => {
+
+                            const match =
+                                matches[
+                                    item.index
+                                ];
+
+                            if (!match) {
+                                return null;
+                            }
+
+                            return {
+                                match,
+                                error:
+                                    item.error
+                            };
+                        }
+                    )
+                    .filter(Boolean);
 
             const verifiedMatches =
                 verified.length;
@@ -2230,7 +3412,7 @@
                     0.40 *
                         clamp(
                             verifiedMatches /
-                            20,
+                                20,
                             0,
                             1
                         ) +
@@ -2259,27 +3441,39 @@
                 calculateScore({
                     qualityA:
                         qualityA.score,
+
                     qualityB:
                         qualityB.score,
+
                     matches,
+
                     verifiedMatches,
+
                     inlierRatio:
                         geometry.inlierRatio,
+
                     geometryConsistency:
                         geometry.consistency,
+
                     coverage,
+
                     matchQuality
                 });
 
             const confidence =
                 calculateConfidence({
                     score,
+
                     verifiedMatches,
+
                     inlierRatio:
                         geometry.inlierRatio,
+
                     geometryConsistency:
                         geometry.consistency,
+
                     coverage,
+
                     matchQuality
                 });
 
@@ -2387,6 +3581,7 @@
             );
 
         } catch (error) {
+
             console.error(
                 "LUNARMATCH analysis error:",
                 error
@@ -2398,15 +3593,20 @@
             );
 
             const active =
-                PIPELINE.find(id => {
-                    const el = $(id);
-                    return (
-                        el &&
-                        el.classList.contains(
-                            "active"
-                        )
-                    );
-                });
+                PIPELINE.find(
+                    id => {
+
+                        const el =
+                            $(id);
+
+                        return (
+                            el &&
+                            el.classList.contains(
+                                "active"
+                            )
+                        );
+                    }
+                );
 
             if (active) {
                 setPipelineError(
@@ -2415,6 +3615,7 @@
             }
 
         } finally {
+
             if (analyzeButton) {
                 analyzeButton.disabled =
                     false;
@@ -2423,232 +3624,14 @@
     }
 
     /* ----------------------------------------------------------
-       PREVIEW
-       ---------------------------------------------------------- */
-
-    function updatePreview(
-        file,
-        previewId
-    ) {
-        if (!file) return;
-
-        const preview =
-            $(previewId);
-
-        if (!preview) return;
-
-        const oldUrl =
-            preview.dataset.objectUrl;
-
-        if (oldUrl) {
-            URL.revokeObjectURL(
-                oldUrl
-            );
-        }
-
-        const url =
-            URL.createObjectURL(
-                file
-            );
-
-        preview.dataset.objectUrl =
-            url;
-
-        preview.src = url;
-        preview.style.display = "";
-    }
-
-    /* ----------------------------------------------------------
-       IMAGE HANDLING
-       ---------------------------------------------------------- */
-
-    function handleImage(
-        file,
-        side,
-        input
-    ) {
-        try {
-            validateImageFile(
-                file
-            );
-
-            if (side === "A") {
-                state.imageAFile =
-                    file;
-
-                updatePreview(
-                    file,
-                    "previewA"
-                );
-            } else {
-                state.imageBFile =
-                    file;
-
-                updatePreview(
-                    file,
-                    "previewB"
-                );
-            }
-
-            state.lastAnalysis =
-                null;
-
-            setDisabled(
-                "downloadReportBtn",
-                true
-            );
-
-            setText(
-                "status",
-                `${side === "A" ? "IMAGE A" : "IMAGE B"} READY — ${file.name}`
-            );
-
-            if (input) {
-                input.value = "";
-            }
-
-        } catch (error) {
-            console.error(
-                "Upload error:",
-                error
-            );
-
-            setText(
-                "status",
-                `UPLOAD ERROR — ${error.message}`
-            );
-
-            if (input) {
-                input.value = "";
-            }
-        }
-    }
-
-    /* ----------------------------------------------------------
-       FILE INPUTS
-       ---------------------------------------------------------- */
-
-    function setupImageInput(
-        inputId,
-        side
-    ) {
-        const input =
-            $(inputId);
-
-        if (!input) {
-            console.warn(
-                `LUNARMATCH: ${inputId} not found.`
-            );
-
-            return;
-        }
-
-        input.type = "file";
-
-        input.accept =
-            ".jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff,image/*";
-
-        input.onchange = () => {
-            const file =
-                input.files &&
-                input.files[0];
-
-            if (file) {
-                handleImage(
-                    file,
-                    side,
-                    input
-                );
-            }
-        };
-    }
-
-    /* ----------------------------------------------------------
-       DROP ZONES
-       IMPORTANT:
-       No manual input.click() here.
-       The HTML <label for="fileA/fileB"> already handles
-       normal clicking and prevents double file dialogs.
-       ---------------------------------------------------------- */
-
-    function setupDropZone(
-        zone,
-        side
-    ) {
-        if (!zone) return;
-
-        const input =
-            side === "A"
-                ? $("fileA")
-                : $("fileB");
-
-        if (!input) return;
-
-        [
-            "dragenter",
-            "dragover"
-        ].forEach(
-            eventName => {
-                zone.addEventListener(
-                    eventName,
-                    event => {
-                        event.preventDefault();
-                        event.stopPropagation();
-
-                        zone.classList.add(
-                            "drag-active"
-                        );
-                    }
-                );
-            }
-        );
-
-        [
-            "dragleave",
-            "drop"
-        ].forEach(
-            eventName => {
-                zone.addEventListener(
-                    eventName,
-                    event => {
-                        event.preventDefault();
-                        event.stopPropagation();
-
-                        zone.classList.remove(
-                            "drag-active"
-                        );
-                    }
-                );
-            }
-        );
-
-        zone.addEventListener(
-            "drop",
-            event => {
-                const files =
-                    event.dataTransfer &&
-                    event.dataTransfer.files;
-
-                if (
-                    files &&
-                    files.length
-                ) {
-                    handleImage(
-                        files[0],
-                        side,
-                        input
-                    );
-                }
-            }
-        );
-    }
-
-    /* ----------------------------------------------------------
        PDF REPORT
        ---------------------------------------------------------- */
 
     function downloadReport() {
-        if (!state.lastAnalysis) {
+
+        if (
+            !state.lastAnalysis
+        ) {
             return;
         }
 
@@ -2656,6 +3639,7 @@
             typeof window.jspdf ===
             "undefined"
         ) {
+
             alert(
                 "PDF engine is unavailable. Please refresh the page and try again."
             );
@@ -2668,7 +3652,8 @@
 
         const {
             jsPDF
-        } = window.jspdf;
+        } =
+            window.jspdf;
 
         const doc =
             new jsPDF();
@@ -2711,8 +3696,16 @@
 
         const lines = [
             `Generated: ${new Date().toLocaleString()}`,
-            `Image A: ${state.imageAFile ? state.imageAFile.name : "—"}`,
-            `Image B: ${state.imageBFile ? state.imageBFile.name : "—"}`,
+            `Image A: ${
+                state.imageAFile
+                    ? state.imageAFile.name
+                    : "—"
+            }`,
+            `Image B: ${
+                state.imageBFile
+                    ? state.imageBFile.name
+                    : "—"
+            }`,
             "",
             `Overall Match: ${result.score}%`,
             `Confidence: ${result.confidence.label} (${result.confidence.value}%)`,
@@ -2729,6 +3722,7 @@
         ];
 
         lines.forEach(line => {
+
             doc.text(
                 line,
                 left,
@@ -2769,10 +3763,6 @@
             y
         );
 
-        y +=
-            wrapped.length * 6 +
-            10;
-
         doc.setFontSize(8);
 
         doc.text(
@@ -2791,6 +3781,7 @@
        ---------------------------------------------------------- */
 
     function setupButtons() {
+
         const analyze =
             $("analyzeBtn");
 
@@ -2813,19 +3804,24 @@
        ---------------------------------------------------------- */
 
     function setupNavigation() {
+
         const links =
             document.querySelectorAll(
                 "[data-section]"
             );
 
         links.forEach(link => {
+
             link.addEventListener(
                 "click",
                 event => {
+
                     const target =
                         link.dataset.section;
 
-                    if (!target) return;
+                    if (!target) {
+                        return;
+                    }
 
                     const section =
                         document.getElementById(
@@ -2833,11 +3829,14 @@
                         );
 
                     if (section) {
+
                         event.preventDefault();
 
                         section.scrollIntoView({
-                            behavior: "smooth",
-                            block: "start"
+                            behavior:
+                                "smooth",
+                            block:
+                                "start"
                         });
                     }
                 }
@@ -2850,9 +3849,11 @@
        ---------------------------------------------------------- */
 
     function setupEffects() {
+
         document.addEventListener(
             "mousemove",
             event => {
+
                 document.documentElement
                     .style
                     .setProperty(
@@ -2877,9 +3878,11 @@
     window.addEventListener(
         "error",
         event => {
+
             console.error(
                 "LUNARMATCH runtime error:",
-                event.error || event.message
+                event.error ||
+                    event.message
             );
         }
     );
@@ -2887,6 +3890,7 @@
     window.addEventListener(
         "unhandledrejection",
         event => {
+
             console.error(
                 "LUNARMATCH promise error:",
                 event.reason
@@ -2899,6 +3903,7 @@
        ---------------------------------------------------------- */
 
     function init() {
+
         if (
             window.__LUNARMATCH_INITIALIZED__
         ) {
@@ -2908,7 +3913,10 @@
         window.__LUNARMATCH_INITIALIZED__ =
             true;
 
-        state.initialized = true;
+        state.initialized =
+            true;
+
+        /* FILE INPUTS */
 
         setupImageInput(
             "fileA",
@@ -2920,19 +3928,19 @@
             "B"
         );
 
+        /* DROP/CHECKBOX AREAS */
+
         setupDropZone(
-            document.querySelector(
-                'label[for="fileA"]'
-            ),
+            "dropA",
             "A"
         );
 
         setupDropZone(
-            document.querySelector(
-                'label[for="fileB"]'
-            ),
+            "dropB",
             "B"
         );
+
+        /* OTHER UI */
 
         setupButtons();
         setupNavigation();
@@ -2947,20 +3955,29 @@
         );
 
         console.log(
-            "LUNARMATCH Lunar Correspondence Engine initialized."
+            "LUNARMATCH Lunar Correspondence Engine initialized successfully."
         );
     }
+
+    /* ----------------------------------------------------------
+       START APPLICATION
+       ---------------------------------------------------------- */
 
     if (
         document.readyState ===
         "loading"
     ) {
+
         document.addEventListener(
             "DOMContentLoaded",
             init,
-            { once: true }
+            {
+                once: true
+            }
         );
+
     } else {
+
         init();
     }
 
