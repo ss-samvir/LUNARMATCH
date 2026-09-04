@@ -1,12 +1,8 @@
-# ============================================================
-# LUNARMATCH V5.3
-# Hybrid Learned + Classical Lunar Correspondence Engine
-# ============================================================
-
 import os
 import cv2
 import time
 import uuid
+import gc
 import traceback
 import numpy as np
 import torch
@@ -15,68 +11,150 @@ import kornia.feature as KF
 from flask import Flask, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 
+
+# ============================================================
+# LUNARMATCH V5.3
+# Hybrid Learned + Classical Lunar Correspondence Engine
+# Render Free / Low-Memory Optimized Edition
+# ============================================================
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULT_DIR = os.path.join(BASE_DIR, "results")
+
 os.makedirs(RESULT_DIR, exist_ok=True)
 
-app = Flask(__name__, static_folder=BASE_DIR, static_url_path="")
+app = Flask(
+    __name__,
+    static_folder=BASE_DIR,
+    static_url_path=""
+)
+
+# ------------------------------------------------------------
+# SERVER LIMITS
+# ------------------------------------------------------------
 
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {
-    "jpg", "jpeg", "png", "tif", "tiff", "webp"
+    "jpg",
+    "jpeg",
+    "png",
+    "tif",
+    "tiff",
+    "webp"
 }
+
+# ------------------------------------------------------------
+# DEVICE / CPU SETTINGS
+# ------------------------------------------------------------
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-print("=" * 65)
-print("LUNARMATCH V5.3")
-print("Hybrid Learned + Classical Correspondence Engine")
-print("=" * 65)
-print("Device:", DEVICE)
-print("Loading LoFTR...")
+# Reduce CPU memory pressure on small Render instances.
+if DEVICE == "cpu":
+    try:
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except Exception:
+        pass
+
+
+# ============================================================
+# LOFTR INITIALIZATION
+# ============================================================
+
+LOFTR = None
+LOFTR_STATUS = "not_loaded"
 
 try:
-    LOFTR = KF.LoFTR(pretrained="outdoor").eval().to(DEVICE)
-    print("LoFTR loaded successfully.")
+    print("Initializing LoFTR...")
+
+    LOFTR = KF.LoFTR(
+        pretrained="outdoor"
+    ).eval().to(DEVICE)
+
+    LOFTR_STATUS = "ready"
+
+    print("LoFTR initialized successfully.")
+    print("Device:", DEVICE)
+
 except Exception as e:
-    print("LoFTR loading failed:", e)
     LOFTR = None
+    LOFTR_STATUS = "unavailable"
 
-print("=" * 65)
+    print("LoFTR initialization failed.")
+    print(str(e))
 
 
-# ------------------------------------------------------------
-# UTILITIES
-# ------------------------------------------------------------
+# ============================================================
+# BASIC HELPERS
+# ============================================================
 
 def allowed_file(filename):
-    return (
-        "." in filename and
-        filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+    if not filename or "." not in filename:
+        return False
+
+    extension = filename.rsplit(".", 1)[1].lower()
+
+    return extension in ALLOWED_EXTENSIONS
+
+
+def set_safe_filename(filename):
+    return secure_filename(filename)
+
+
+# ============================================================
+# IMAGE PROCESSING
+# ============================================================
+
+def resize_for_processing(image, max_dimension=1000):
+    """
+    Resize large images before processing.
+
+    1000 px is a compromise between correspondence quality
+    and memory usage on constrained servers.
+    """
+
+    if image is None:
+        return None
+
+    h, w = image.shape[:2]
+
+    largest = max(h, w)
+
+    if largest <= max_dimension:
+        return image
+
+    scale = max_dimension / float(largest)
+
+    new_w = max(8, int(w * scale))
+    new_h = max(8, int(h * scale))
+
+    return cv2.resize(
+        image,
+        (new_w, new_h),
+        interpolation=cv2.INTER_AREA
     )
 
 
-def resize_for_processing(image, max_dimension=1200):
-    h, w = image.shape[:2]
-
-    scale = min(1.0, max_dimension / max(h, w))
-
-    if scale < 1.0:
-        image = cv2.resize(
-            image,
-            (max(32, int(w * scale)), max(32, int(h * scale))),
-            interpolation=cv2.INTER_AREA
-        )
-
-    return image
-
-
 def normalize_image(image):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    """
+    Convert image to grayscale and improve local contrast.
+    """
+
+    if image is None:
+        return None
+
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(
+            image,
+            cv2.COLOR_BGR2GRAY
+        )
+    else:
+        gray = image.copy()
 
     clahe = cv2.createCLAHE(
-        clipLimit=2.5,
+        clipLimit=2.0,
         tileGridSize=(8, 8)
     )
 
@@ -85,744 +163,1439 @@ def normalize_image(image):
     return enhanced
 
 
-# ------------------------------------------------------------
+# ============================================================
 # IMAGE QUALITY
-# ------------------------------------------------------------
+# ============================================================
 
-def calculate_image_quality(gray):
+def calculate_quality(image):
+    if image is None:
+        return {
+            "width": 0,
+            "height": 0,
+            "resolution": 0,
+            "contrast": 0,
+            "sharpness": 0,
+            "quality_score": 0,
+            "label": "LOW"
+        }
 
-    h, w = gray.shape
+    h, w = image.shape[:2]
+
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(
+            image,
+            cv2.COLOR_BGR2GRAY
+        )
+    else:
+        gray = image
 
     contrast = float(np.std(gray))
 
-    sharpness = float(
-        cv2.Laplacian(gray, cv2.CV_64F).var()
+    laplacian = cv2.Laplacian(
+        gray,
+        cv2.CV_64F
     )
 
-    contrast_score = min(100.0, contrast / 65.0 * 100.0)
-    sharpness_score = min(100.0, sharpness / 1500.0 * 100.0)
+    sharpness = float(laplacian.var())
 
     resolution_score = min(
         100.0,
-        ((w * h) / (1600 * 240)) * 100.0
+        ((w * h) / (1500 * 1500)) * 100.0
     )
 
-    quality = (
-        0.40 * contrast_score +
-        0.40 * sharpness_score +
-        0.20 * resolution_score
+    contrast_score = min(
+        100.0,
+        contrast * 2.0
     )
 
-    if quality >= 90:
+    sharpness_score = min(
+        100.0,
+        sharpness / 10.0
+    )
+
+    quality_score = (
+        resolution_score * 0.30 +
+        contrast_score * 0.30 +
+        sharpness_score * 0.40
+    )
+
+    if quality_score >= 75:
         label = "EXCELLENT"
-    elif quality >= 75:
+    elif quality_score >= 55:
         label = "GOOD"
-    elif quality >= 55:
+    elif quality_score >= 35:
         label = "FAIR"
     else:
         label = "LOW"
 
     return {
-        "resolution": f"{w} × {h}",
-        "width": w,
-        "height": h,
-        "contrast": round(contrast, 1),
-        "sharpness": round(sharpness, 1),
-        "quality_score": round(quality, 1),
-        "quality_label": label
+        "width": int(w),
+        "height": int(h),
+        "resolution": int(w * h),
+        "contrast": round(contrast, 2),
+        "sharpness": round(sharpness, 2),
+        "quality_score": round(quality_score, 2),
+        "label": label
     }
 
 
-# ------------------------------------------------------------
-# LOFTR
-# ------------------------------------------------------------
+# ============================================================
+# LOFTR IMAGE PREPARATION
+# ============================================================
 
 def prepare_loftr_image(gray):
+    """
+    Prepare image for LoFTR.
 
-    h, w = gray.shape
+    IMPORTANT:
+    The previous V5.3 implementation allowed up to 1200 px.
+    This version uses 640 px to significantly reduce the
+    transformer memory footprint on free Render instances.
+    """
+
+    if gray is None:
+        return None
+
+    max_dimension = 640
+
+    h, w = gray.shape[:2]
+
+    largest = max(h, w)
 
     scale = min(
         1.0,
-        1200.0 / max(h, w)
+        max_dimension / float(largest)
     )
 
     if scale < 1.0:
-        nw = max(32, int(w * scale))
-        nh = max(32, int(h * scale))
+        new_w = max(
+            8,
+            int(w * scale) // 8 * 8
+        )
+
+        new_h = max(
+            8,
+            int(h * scale) // 8 * 8
+        )
 
         gray = cv2.resize(
             gray,
-            (nw, nh),
+            (new_w, new_h),
             interpolation=cv2.INTER_AREA
         )
 
-    h, w = gray.shape
+    else:
+        new_w = max(
+            8,
+            (w // 8) * 8
+        )
 
-    nh = max(32, (h // 8) * 8)
-    nw = max(32, (w // 8) * 8)
+        new_h = max(
+            8,
+            (h // 8) * 8
+        )
 
-    gray = cv2.resize(
+        if new_w != w or new_h != h:
+            gray = cv2.resize(
+                gray,
+                (new_w, new_h),
+                interpolation=cv2.INTER_AREA
+            )
+
+    gray = np.ascontiguousarray(
         gray,
-        (nw, nh),
-        interpolation=cv2.INTER_AREA
+        dtype=np.uint8
     )
 
-    return gray
-
-
-def make_loftr_tensor(gray):
-
     tensor = torch.from_numpy(
-        gray.astype(np.float32)
-    ) / 255.0
+        gray
+    ).float() / 255.0
 
     tensor = tensor.unsqueeze(0).unsqueeze(0)
 
     return tensor.to(DEVICE)
 
 
-def run_loftr(gray_a, gray_b):
+# ============================================================
+# LOFTR MATCHING
+# ============================================================
+
+def run_loftr(image_a, image_b):
+    """
+    Run LoFTR correspondence matching.
+
+    Returns:
+        points_a
+        points_b
+        confidences
+    """
 
     if LOFTR is None:
-        return [], [], []
+        return (
+            np.empty((0, 2), dtype=np.float32),
+            np.empty((0, 2), dtype=np.float32),
+            np.empty((0,), dtype=np.float32)
+        )
 
-    original_a = gray_a.shape
-    original_b = gray_b.shape
+    tensor_a = None
+    tensor_b = None
+    output = None
 
-    img_a = prepare_loftr_image(gray_a)
-    img_b = prepare_loftr_image(gray_b)
+    try:
+        tensor_a = prepare_loftr_image(image_a)
+        tensor_b = prepare_loftr_image(image_b)
 
-    tensor_a = make_loftr_tensor(img_a)
-    tensor_b = make_loftr_tensor(img_b)
+        if tensor_a is None or tensor_b is None:
+            return (
+                np.empty((0, 2), dtype=np.float32),
+                np.empty((0, 2), dtype=np.float32),
+                np.empty((0,), dtype=np.float32)
+            )
 
-    with torch.inference_mode():
+        with torch.inference_mode():
 
-        output = LOFTR({
-            "image0": tensor_a,
-            "image1": tensor_b
-        })
+            output = LOFTR({
+                "image0": tensor_a,
+                "image1": tensor_b
+            })
 
-    k0 = output["keypoints0"].detach().cpu().numpy()
-    k1 = output["keypoints1"].detach().cpu().numpy()
-    confidence = output["confidence"].detach().cpu().numpy()
+        if output is None:
+            return (
+                np.empty((0, 2), dtype=np.float32),
+                np.empty((0, 2), dtype=np.float32),
+                np.empty((0,), dtype=np.float32)
+            )
 
-    if len(k0) == 0:
-        return [], [], []
+        if "keypoints0" not in output:
+            return (
+                np.empty((0, 2), dtype=np.float32),
+                np.empty((0, 2), dtype=np.float32),
+                np.empty((0,), dtype=np.float32)
+            )
 
-    # Confidence filtering
-    keep = confidence >= 0.20
+        points_a = (
+            output["keypoints0"]
+            .detach()
+            .cpu()
+            .numpy()
+        )
 
-    k0 = k0[keep]
-    k1 = k1[keep]
-    confidence = confidence[keep]
+        points_b = (
+            output["keypoints1"]
+            .detach()
+            .cpu()
+            .numpy()
+        )
 
-    # Map coordinates back to original processing dimensions
-    sy_a = original_a[0] / img_a.shape[0]
-    sx_a = original_a[1] / img_a.shape[1]
+        confidence = (
+            output["confidence"]
+            .detach()
+            .cpu()
+            .numpy()
+        )
 
-    sy_b = original_b[0] / img_b.shape[0]
-    sx_b = original_b[1] / img_b.shape[1]
+        # Confidence filtering
+        threshold = 0.20
 
-    k0[:, 0] *= sx_a
-    k0[:, 1] *= sy_a
+        mask = confidence >= threshold
 
-    k1[:, 0] *= sx_b
-    k1[:, 1] *= sy_b
+        points_a = points_a[mask]
+        points_b = points_b[mask]
+        confidence = confidence[mask]
 
-    return k0, k1, confidence
+        return (
+            points_a.astype(np.float32),
+            points_b.astype(np.float32),
+            confidence.astype(np.float32)
+        )
+
+    except Exception as e:
+
+        print("LoFTR inference error:")
+        print(str(e))
+
+        return (
+            np.empty((0, 2), dtype=np.float32),
+            np.empty((0, 2), dtype=np.float32),
+            np.empty((0,), dtype=np.float32)
+        )
+
+    finally:
+
+        del tensor_a
+        del tensor_b
+        del output
+
+        if DEVICE == "cuda":
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+        gc.collect()
 
 
-# ------------------------------------------------------------
+# ============================================================
 # GEOMETRIC VERIFICATION
-# ------------------------------------------------------------
+# ============================================================
 
-def verify_geometry(k0, k1):
+def geometric_verification(points_a, points_b):
+    """
+    Verify correspondence using homography and affine geometry.
+    """
 
-    if len(k0) < 4:
+    count = len(points_a)
+
+    if count < 4:
         return {
             "verified": 0,
             "inlier_ratio": 0.0,
-            "reprojection_error": None,
-            "model": "INSUFFICIENT DATA",
-            "mask": np.zeros(len(k0), dtype=bool)
+            "geometric_consistency": 0.0,
+            "reprojection_error": 999.0,
+            "model": "insufficient"
         }
 
-    best_mask = None
-    best_model = "AFFINE / RANSAC"
-    best_error = 9999.0
+    try:
 
-    # Homography
-    if len(k0) >= 4:
-
-        H, mask_h = cv2.findHomography(
-            k0,
-            k1,
+        homography, mask_h = cv2.findHomography(
+            points_a,
+            points_b,
             cv2.RANSAC,
             5.0
         )
 
-        if mask_h is not None:
+    except Exception:
+        homography = None
+        mask_h = None
 
-            mask_h = mask_h.ravel().astype(bool)
+    try:
 
-            if np.any(mask_h):
-
-                src = k0[mask_h]
-                dst = k1[mask_h]
-
-                projected = cv2.perspectiveTransform(
-                    src.reshape(-1, 1, 2).astype(np.float32),
-                    H
-                ).reshape(-1, 2)
-
-                error = np.mean(
-                    np.linalg.norm(
-                        projected - dst,
-                        axis=1
-                    )
-                )
-
-                best_mask = mask_h
-                best_error = error
-                best_model = "HOMOGRAPHY / RANSAC"
-
-    # Affine
-    if len(k0) >= 3:
-
-        M, mask_a = cv2.estimateAffinePartial2D(
-            k0,
-            k1,
+        affine, mask_a = cv2.estimateAffinePartial2D(
+            points_a,
+            points_b,
             method=cv2.RANSAC,
             ransacReprojThreshold=5.0
         )
 
-        if mask_a is not None:
+    except Exception:
+        affine = None
+        mask_a = None
 
-            mask_a = mask_a.ravel().astype(bool)
+    h_inliers = (
+        int(mask_h.sum())
+        if mask_h is not None
+        else 0
+    )
 
-            if np.any(mask_a):
+    a_inliers = (
+        int(mask_a.sum())
+        if mask_a is not None
+        else 0
+    )
 
-                src = k0[mask_a]
-                dst = k1[mask_a]
+    if h_inliers >= a_inliers and mask_h is not None:
 
-                projected = cv2.transform(
-                    src.reshape(-1, 1, 2).astype(np.float32),
-                    M
-                ).reshape(-1, 2)
+        selected_mask = mask_h.ravel().astype(bool)
 
-                error = np.mean(
-                    np.linalg.norm(
-                        projected - dst,
-                        axis=1
-                    )
-                )
+        model = "homography"
 
-                if (
-                    best_mask is None or
-                    mask_a.sum() > best_mask.sum()
-                ):
-                    best_mask = mask_a
-                    best_error = error
-                    best_model = "AFFINE / RANSAC"
+        selected_points_a = points_a[selected_mask]
+        selected_points_b = points_b[selected_mask]
 
-    if best_mask is None:
+        if homography is not None and len(selected_points_a) > 0:
+
+            projected = cv2.perspectiveTransform(
+                selected_points_a.reshape(
+                    -1,
+                    1,
+                    2
+                ),
+                homography
+            ).reshape(-1, 2)
+
+            errors = np.linalg.norm(
+                projected - selected_points_b,
+                axis=1
+            )
+
+            reprojection_error = float(
+                np.mean(errors)
+            )
+
+    elif mask_a is not None:
+
+        selected_mask = mask_a.ravel().astype(bool)
+
+        model = "affine"
+
+        selected_points_a = points_a[selected_mask]
+        selected_points_b = points_b[selected_mask]
+
+        if affine is not None and len(selected_points_a) > 0:
+
+            transformed = cv2.transform(
+                selected_points_a.reshape(
+                    -1,
+                    1,
+                    2
+                ),
+                affine
+            ).reshape(-1, 2)
+
+            errors = np.linalg.norm(
+                transformed - selected_points_b,
+                axis=1
+            )
+
+            reprojection_error = float(
+                np.mean(errors)
+            )
+
+    else:
 
         return {
             "verified": 0,
             "inlier_ratio": 0.0,
-            "reprojection_error": None,
-            "model": "NO ROBUST MODEL",
-            "mask": np.zeros(len(k0), dtype=bool)
+            "geometric_consistency": 0.0,
+            "reprojection_error": 999.0,
+            "model": "none"
         }
 
-    verified = int(best_mask.sum())
+    verified = int(selected_mask.sum())
 
-    ratio = (
-        verified / len(k0) * 100.0
-        if len(k0)
-        else 0.0
+    inlier_ratio = (
+        verified / float(count)
+    ) if count else 0.0
+
+    reprojection_error = locals().get(
+        "reprojection_error",
+        999.0
+    )
+
+    geometric_consistency = max(
+        0.0,
+        min(
+            100.0,
+            inlier_ratio * 100.0
+        )
     )
 
     return {
         "verified": verified,
-        "inlier_ratio": ratio,
-        "reprojection_error": float(best_error),
-        "model": best_model,
-        "mask": best_mask
+        "inlier_ratio": round(
+            inlier_ratio * 100.0,
+            2
+        ),
+        "geometric_consistency": round(
+            geometric_consistency,
+            2
+        ),
+        "reprojection_error": round(
+            float(reprojection_error),
+            2
+        ),
+        "model": model,
+        "mask": selected_mask
     }
 
 
-# ------------------------------------------------------------
+# ============================================================
 # SPATIAL COVERAGE
-# ------------------------------------------------------------
+# ============================================================
 
-def calculate_spatial_coverage(points, width, height):
-
-    if len(points) == 0:
+def calculate_spatial_coverage(points, image_shape):
+    if points is None or len(points) == 0:
         return 0.0
+
+    h, w = image_shape[:2]
+
+    grid_size = 4
 
     occupied = set()
 
-    for x, y in points:
+    for point in points:
 
-        gx = min(3, max(0, int(x / width * 4)))
-        gy = min(3, max(0, int(y / height * 4)))
+        x = float(point[0])
+        y = float(point[1])
 
-        occupied.add((gx, gy))
+        gx = int(
+            np.clip(
+                x / max(w, 1) * grid_size,
+                0,
+                grid_size - 1
+            )
+        )
 
-    return len(occupied) / 16.0 * 100.0
+        gy = int(
+            np.clip(
+                y / max(h, 1) * grid_size,
+                0,
+                grid_size - 1
+            )
+        )
+
+        occupied.add(
+            (gx, gy)
+        )
+
+    total_cells = grid_size * grid_size
+
+    return (
+        len(occupied) /
+        float(total_cells)
+    ) * 100.0
 
 
-# ------------------------------------------------------------
+# ============================================================
 # SIFT SUPPORT
-# ------------------------------------------------------------
+# ============================================================
 
-def extract_sift(gray):
+def run_sift_support(image_a, image_b):
+    """
+    Classical SIFT verification.
 
-    sift = cv2.SIFT_create(
-        nfeatures=10000,
-        contrastThreshold=0.012,
-        edgeThreshold=12,
-        sigma=1.6
-    )
+    Uses multiple image representations but keeps the feature
+    count moderate to reduce memory and CPU usage.
+    """
 
-    clahe = cv2.createCLAHE(
-        clipLimit=2.5,
-        tileGridSize=(8, 8)
-    ).apply(gray)
+    try:
 
-    sharpened = cv2.GaussianBlur(
-        gray,
-        (0, 0),
-        1.0
-    )
-
-    sharpened = cv2.addWeighted(
-        gray,
-        1.5,
-        sharpened,
-        -0.5,
-        0
-    )
-
-    views = [
-        gray,
-        clahe,
-        sharpened
-    ]
-
-    all_kp = []
-    all_des = []
-
-    for view in views:
-
-        kp, des = sift.detectAndCompute(
-            view,
-            None
+        sift = cv2.SIFT_create(
+            nfeatures=5000,
+            contrastThreshold=0.012,
+            edgeThreshold=12,
+            sigma=1.6
         )
 
-        if des is not None:
-            all_kp.extend(kp)
-            all_des.append(des)
-
-    if not all_des:
-        return [], None
-
-    descriptors = np.vstack(all_des)
-
-    # Spatial deduplication
-    unique_kp = []
-    unique_des = []
-    cells = set()
-
-    for kp, des in zip(all_kp, descriptors):
-
-        x, y = kp.pt
-
-        cell = (
-            int(x / 6),
-            int(y / 6)
+        gray_a = cv2.cvtColor(
+            image_a,
+            cv2.COLOR_BGR2GRAY
         )
 
-        if cell in cells:
-            continue
+        gray_b = cv2.cvtColor(
+            image_b,
+            cv2.COLOR_BGR2GRAY
+        )
 
-        cells.add(cell)
-        unique_kp.append(kp)
-        unique_des.append(des)
+        clahe = cv2.createCLAHE(
+            clipLimit=2.0,
+            tileGridSize=(8, 8)
+        )
 
-    if not unique_des:
-        return [], None
+        views_a = [
+            gray_a,
+            clahe.apply(gray_a)
+        ]
 
-    return unique_kp, np.array(unique_des)
+        views_b = [
+            gray_b,
+            clahe.apply(gray_b)
+        ]
+
+        all_good = []
+
+        for va, vb in zip(
+            views_a,
+            views_b
+        ):
+
+            kp_a, des_a = sift.detectAndCompute(
+                va,
+                None
+            )
+
+            kp_b, des_b = sift.detectAndCompute(
+                vb,
+                None
+            )
+
+            if des_a is None or des_b is None:
+                continue
+
+            if len(kp_a) < 2 or len(kp_b) < 2:
+                continue
+
+            matcher = cv2.BFMatcher(
+                cv2.NORM_L2
+            )
+
+            matches = matcher.knnMatch(
+                des_a,
+                des_b,
+                k=2
+            )
+
+            for pair in matches:
+
+                if len(pair) < 2:
+                    continue
+
+                m, n = pair
+
+                if m.distance < 0.78 * n.distance:
+
+                    all_good.append(
+                        (
+                            kp_a[m.queryIdx].pt,
+                            kp_b[m.trainIdx].pt,
+                            m.distance
+                        )
+                    )
+
+        # Spatial deduplication
+        dedup = {}
+
+        for point_a, point_b, distance in all_good:
+
+            x, y = point_a
+
+            key = (
+                int(x / 6),
+                int(y / 6)
+            )
+
+            if key not in dedup:
+                dedup[key] = (
+                    point_a,
+                    point_b,
+                    distance
+                )
+
+        candidates = list(
+            dedup.values()
+        )
+
+        if len(candidates) < 4:
+
+            return {
+                "candidates": len(candidates),
+                "verified": 0,
+                "support": 0.0
+            }
+
+        pts_a = np.float32([
+            x[0]
+            for x in candidates
+        ])
+
+        pts_b = np.float32([
+            x[1]
+            for x in candidates
+        ])
+
+        _, mask = cv2.findHomography(
+            pts_a,
+            pts_b,
+            cv2.RANSAC,
+            5.0
+        )
+
+        if mask is None:
+
+            return {
+                "candidates": len(candidates),
+                "verified": 0,
+                "support": 0.0
+            }
+
+        verified = int(
+            mask.sum()
+        )
+
+        support = (
+            verified /
+            float(len(candidates))
+        ) * 100.0
+
+        return {
+            "candidates": len(candidates),
+            "verified": verified,
+            "support": round(
+                support,
+                2
+            )
+        }
+
+    except Exception as e:
+
+        print("SIFT error:")
+        print(str(e))
+
+        return {
+            "candidates": 0,
+            "verified": 0,
+            "support": 0.0
+        }
 
 
-def run_sift(gray_a, gray_b):
+# ============================================================
+# SCORE CALCULATION
+# ============================================================
 
-    kp_a, des_a = extract_sift(gray_a)
-    kp_b, des_b = extract_sift(gray_b)
-
-    if des_a is None or des_b is None:
-        return 0, 0, 0.0
-
-    matcher = cv2.BFMatcher(
-        cv2.NORM_L2
-    )
-
-    matches = matcher.knnMatch(
-        des_a,
-        des_b,
-        k=2
-    )
-
-    good = []
-
-    for pair in matches:
-
-        if len(pair) < 2:
-            continue
-
-        m, n = pair
-
-        if m.distance < 0.78 * n.distance:
-            good.append(m)
-
-    if len(good) < 4:
-        return len(good), 0, 0.0
-
-    src = np.float32([
-        kp_a[m.queryIdx].pt
-        for m in good
-    ])
-
-    dst = np.float32([
-        kp_b[m.trainIdx].pt
-        for m in good
-    ])
-
-    _, mask = cv2.findHomography(
-        src,
-        dst,
-        cv2.RANSAC,
-        5.0
-    )
-
-    verified = (
-        int(mask.sum())
-        if mask is not None
-        else 0
-    )
-
-    support = (
-        verified / len(good) * 100
-        if good
-        else 0
-    )
-
-    return len(good), verified, support
-
-
-# ------------------------------------------------------------
-# SCORE
-# ------------------------------------------------------------
-
-def calculate_scores(
-    candidate_count,
-    verified_count,
-    mean_confidence,
+def calculate_score(
+    verified_matches,
+    confidence,
     inlier_ratio,
     spatial_coverage,
     reprojection_error,
     sift_support,
-    quality
+    quality_a,
+    quality_b
 ):
-
-    if candidate_count == 0:
-        return 0.0, 0.0
 
     verification_strength = min(
         100.0,
-        verified_count / 25.0 * 100.0
+        verified_matches * 2.0
     )
 
     confidence_strength = (
-        mean_confidence * 100.0
+        confidence * 100.0
     )
 
-    if reprojection_error is None:
-        reprojection_score = 0.0
+    inlier_strength = min(
+        100.0,
+        inlier_ratio
+    )
+
+    spatial_strength = min(
+        100.0,
+        spatial_coverage
+    )
+
+    if reprojection_error >= 999:
+        reprojection_strength = 0.0
     else:
-        reprojection_score = (
-            np.exp(
-                -reprojection_error / 8.0
-            ) * 100.0
+        reprojection_strength = max(
+            0.0,
+            min(
+                100.0,
+                100.0 -
+                reprojection_error * 5.0
+            )
         )
 
-    geometric_consistency = (
-        0.70 * inlier_ratio +
-        0.30 * reprojection_score
+    quality_strength = (
+        quality_a["quality_score"] +
+        quality_b["quality_score"]
+    ) / 2.0
+
+    score = (
+        verification_strength * 0.25 +
+        confidence_strength * 0.20 +
+        inlier_strength * 0.20 +
+        spatial_strength * 0.10 +
+        reprojection_strength * 0.10 +
+        sift_support * 0.10 +
+        quality_strength * 0.05
     )
 
-    geometric_consistency = float(
-        np.clip(
-            geometric_consistency,
-            0,
-            100
-        )
+    return round(
+        float(
+            np.clip(
+                score,
+                0.0,
+                100.0
+            )
+        ),
+        2
     )
 
-    learned_score = (
-        0.25 * verification_strength +
-        0.20 * confidence_strength +
-        0.25 * inlier_ratio +
-        0.15 * spatial_coverage +
-        0.15 * geometric_consistency
-    )
 
-    final_score = (
-        0.55 * learned_score +
-        0.15 * sift_support +
-        0.15 * geometric_consistency +
-        0.10 * spatial_coverage +
-        0.05 * quality
-    )
-
-    if verified_count < 8:
-        final_score *= 0.90
-
-    if verified_count >= 15 and sift_support >= 25:
-        final_score += 5
-
-    final_score = float(
-        np.clip(
-            final_score,
-            0,
-            100
-        )
-    )
-
-    return final_score, geometric_consistency
-
-
-# ------------------------------------------------------------
+# ============================================================
 # CLASSIFICATION
-# ------------------------------------------------------------
+# ============================================================
 
-def classify_result(
+def classify_match(
     score,
     verified,
-    geometry,
-    spatial
+    geometric_consistency,
+    spatial_coverage
 ):
 
     if (
         score >= 65 and
         verified >= 25 and
-        geometry >= 55 and
-        spatial >= 25
+        geometric_consistency >= 55 and
+        spatial_coverage >= 25
     ):
-        return "HIGH", "RELIABLE CORRESPONDENCE"
+        return "HIGH"
 
     if (
         score >= 45 and
         verified >= 12 and
-        geometry >= 35 and
-        spatial >= 15
+        geometric_consistency >= 35 and
+        spatial_coverage >= 15
     ):
-        return "MEDIUM", "MODERATE CORRESPONDENCE EVIDENCE"
+        return "MEDIUM"
 
-    return "LOW", "NO RELIABLE CORRESPONDENCE"
-
-
-# ------------------------------------------------------------
-# VISUALIZATION
-# ------------------------------------------------------------
-
-def create_visualization(
-    image_a,
-    image_b,
-    k0,
-    k1,
-    mask,
-    model
-):
-
-    left = image_a.copy()
-    right = image_b.copy()
-
-    h = max(
-        left.shape[0],
-        right.shape[0]
-    )
-
-    def pad(img, target_h):
-
-        if img.shape[0] >= target_h:
-            return img
-
-        return cv2.copyMakeBorder(
-            img,
-            0,
-            target_h - img.shape[0],
-            0,
-            0,
-            cv2.BORDER_CONSTANT,
-            value=(20, 20, 20)
-        )
-
-    left = pad(left, h)
-    right = pad(right, h)
-
-    canvas = np.hstack([
-        left,
-        right
-    ])
-
-    offset = left.shape[1]
-
-    for i, verified in enumerate(mask):
-
-        if not verified:
-            continue
-
-        x1, y1 = k0[i]
-        x2, y2 = k1[i]
-
-        p1 = (
-            int(x1),
-            int(y1)
-        )
-
-        p2 = (
-            int(x2 + offset),
-            int(y2)
-        )
-
-        cv2.circle(
-            canvas,
-            p1,
-            5,
-            (0, 255, 0),
-            -1
-        )
-
-        cv2.circle(
-            canvas,
-            p2,
-            5,
-            (0, 255, 0),
-            -1
-        )
-
-        cv2.line(
-            canvas,
-            p1,
-            p2,
-            (0, 255, 0),
-            2
-        )
-
-    cv2.putText(
-        canvas,
-        f"VERIFIED CORRESPONDENCES: {int(mask.sum())}",
-        (30, 40),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (255, 255, 255),
-        2
-    )
-
-    cv2.putText(
-        canvas,
-        model,
-        (30, 75),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.65,
-        (255, 255, 255),
-        2
-    )
-
-    filename = (
-        "correspondence_" +
-        uuid.uuid4().hex +
-        ".jpg"
-    )
-
-    path = os.path.join(
-        RESULT_DIR,
-        filename
-    )
-
-    cv2.imwrite(
-        path,
-        canvas,
-        [cv2.IMWRITE_JPEG_QUALITY, 92]
-    )
-
-    return "/results/" + filename
+    return "LOW"
 
 
-# ------------------------------------------------------------
+# ============================================================
 # INTERPRETATION
-# ------------------------------------------------------------
+# ============================================================
 
-def build_interpretation(
+def generate_interpretation(
+    decision,
     score,
-    confidence,
-    candidates,
     verified,
-    geometry,
-    model
+    confidence,
+    geometric_consistency
 ):
 
-    if confidence == "HIGH":
+    if decision == "HIGH":
 
         return (
-            f"The engine identified strong correspondence evidence "
-            f"between the two lunar observations. {candidates} learned "
-            f"candidate correspondences were detected, with {verified} "
-            f"surviving robust {model} verification. The resulting "
-            f"evidence score is {score:.1f}/100. Multiple independent "
-            f"signals support the correspondence, resulting in High "
-            f"Confidence."
+            "Strong visual correspondence detected between "
+            "the two lunar images. A substantial number of "
+            "feature correspondences passed geometric "
+            "verification, indicating a high-confidence match."
         )
 
-    if confidence == "MEDIUM":
+    if decision == "MEDIUM":
 
         return (
-            f"The engine detected meaningful correspondence evidence "
-            f"between the two lunar observations. {candidates} learned "
-            f"candidate correspondences were identified, of which "
-            f"{verified} survived robust {model} verification. The "
-            f"measured evidence score is {score:.1f}/100. The result "
-            f"supports a possible correspondence, but additional "
-            f"validation would be required for reliable geographic "
-            f"confirmation."
+            "Moderate visual correspondence detected. "
+            "The images contain meaningful matching structures, "
+            "but the available evidence is not strong enough "
+            "for a high-confidence correspondence."
         )
 
     return (
-        f"The engine detected candidate visual correspondences, but "
-        f"the available geometric evidence is insufficient to establish "
-        f"a reliable geographic correspondence. {candidates} learned "
-        f"candidate correspondences were identified, with {verified} "
-        f"surviving robust {model} verification. The measured evidence "
-        f"score is {score:.1f}/100, therefore the system assigns Low "
-        f"Confidence. This score represents correspondence evidence, "
-        f"not a probability that the images depict the same geographic "
-        f"location."
+        "Low correspondence detected. The available feature "
+        "matches and geometric evidence are insufficient to "
+        "establish a strong relationship between the images."
     )
 
 
-# ------------------------------------------------------------
-# MATCH API
-# ------------------------------------------------------------
+# ============================================================
+# VISUALIZATION
+# ============================================================
 
-@app.route("/api/match", methods=["POST"])
-def match():
-
-    start = time.time()
+def create_correspondence_visualization(
+    image_a,
+    image_b,
+    points_a,
+    points_b,
+    mask
+):
 
     try:
+
+        height = max(
+            image_a.shape[0],
+            image_b.shape[0]
+        )
+
+        width_a = image_a.shape[1]
+        width_b = image_b.shape[1]
+
+        canvas = np.zeros(
+            (
+                height,
+                width_a + width_b,
+                3
+            ),
+            dtype=np.uint8
+        )
+
+        canvas[
+            :image_a.shape[0],
+            :image_a.shape[1]
+        ] = image_a
+
+        canvas[
+            :image_b.shape[0],
+            width_a:
+        ] = image_b
+
+        if mask is not None:
+
+            verified_a = points_a[mask]
+            verified_b = points_b[mask]
+
+            max_draw = min(
+                len(verified_a),
+                120
+            )
+
+            for i in range(max_draw):
+
+                pa = verified_a[i]
+                pb = verified_b[i]
+
+                x1 = int(pa[0])
+                y1 = int(pa[1])
+
+                x2 = int(pb[0]) + width_a
+                y2 = int(pb[1])
+
+                cv2.line(
+                    canvas,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 220, 0),
+                    1,
+                    cv2.LINE_AA
+                )
+
+                cv2.circle(
+                    canvas,
+                    (x1, y1),
+                    3,
+                    (0, 255, 0),
+                    -1
+                )
+
+                cv2.circle(
+                    canvas,
+                    (x2, y2),
+                    3,
+                    (0, 255, 0),
+                    -1
+                )
+
+        filename = (
+            "correspondence_" +
+            str(uuid.uuid4()) +
+            ".jpg"
+        )
+
+        output_path = os.path.join(
+            RESULT_DIR,
+            filename
+        )
+
+        cv2.imwrite(
+            output_path,
+            canvas,
+            [
+                cv2.IMWRITE_JPEG_QUALITY,
+                88
+            ]
+        )
+
+        return "/results/" + filename
+
+    except Exception as e:
+
+        print("Visualization error:")
+        print(str(e))
+
+        return None
+
+
+# ============================================================
+# PIPELINE
+# ============================================================
+
+def pipeline_state():
+
+    return {
+        "acquire": "complete",
+        "preprocess": "complete",
+        "extract": "complete",
+        "match": "complete",
+        "verify": "complete",
+        "score": "complete",
+        "report": "ready"
+    }
+
+
+# ============================================================
+# MAIN MATCH ENGINE
+# ============================================================
+
+def perform_match(image_a, image_b):
+
+    start_time = time.time()
+
+    original_a = image_a.copy()
+    original_b = image_b.copy()
+
+    # --------------------------------------------------------
+    # IMAGE QUALITY
+    # --------------------------------------------------------
+
+    quality_a = calculate_quality(
+        original_a
+    )
+
+    quality_b = calculate_quality(
+        original_b
+    )
+
+    # --------------------------------------------------------
+    # RESIZE
+    # --------------------------------------------------------
+
+    image_a = resize_for_processing(
+        image_a,
+        1000
+    )
+
+    image_b = resize_for_processing(
+        image_b,
+        1000
+    )
+
+    # --------------------------------------------------------
+    # NORMALIZATION
+    # --------------------------------------------------------
+
+    gray_a = normalize_image(
+        image_a
+    )
+
+    gray_b = normalize_image(
+        image_b
+    )
+
+    # --------------------------------------------------------
+    # LOFTR
+    # --------------------------------------------------------
+
+    points_a, points_b, confidence_values = run_loftr(
+        gray_a,
+        gray_b
+    )
+
+    candidate_matches = len(
+        points_a
+    )
+
+    if candidate_matches > 0:
+
+        mean_confidence = float(
+            np.mean(
+                confidence_values
+            )
+        )
+
+    else:
+
+        mean_confidence = 0.0
+
+    # --------------------------------------------------------
+    # GEOMETRY
+    # --------------------------------------------------------
+
+    geometry = geometric_verification(
+        points_a,
+        points_b
+    )
+
+    verified_matches = geometry[
+        "verified"
+    ]
+
+    inlier_ratio = geometry[
+        "inlier_ratio"
+    ]
+
+    geometric_consistency = geometry[
+        "geometric_consistency"
+    ]
+
+    reprojection_error = geometry[
+        "reprojection_error"
+    ]
+
+    model = geometry[
+        "model"
+    ]
+
+    geometry_mask = geometry.get(
+        "mask",
+        np.zeros(
+            len(points_a),
+            dtype=bool
+        )
+    )
+
+    # --------------------------------------------------------
+    # SPATIAL COVERAGE
+    # --------------------------------------------------------
+
+    spatial_coverage = calculate_spatial_coverage(
+        points_a[geometry_mask]
+        if len(points_a) == len(geometry_mask)
+        else points_a,
+        image_a.shape
+    )
+
+    # --------------------------------------------------------
+    # SIFT
+    # --------------------------------------------------------
+
+    sift = run_sift_support(
+        image_a,
+        image_b
+    )
+
+    sift_support = sift[
+        "support"
+    ]
+
+    # --------------------------------------------------------
+    # SCORE
+    # --------------------------------------------------------
+
+    score = calculate_score(
+        verified_matches=verified_matches,
+        confidence=mean_confidence,
+        inlier_ratio=inlier_ratio,
+        spatial_coverage=spatial_coverage,
+        reprojection_error=reprojection_error,
+        sift_support=sift_support,
+        quality_a=quality_a,
+        quality_b=quality_b
+    )
+
+    decision = classify_match(
+        score,
+        verified_matches,
+        geometric_consistency,
+        spatial_coverage
+    )
+
+    interpretation = generate_interpretation(
+        decision,
+        score,
+        verified_matches,
+        mean_confidence,
+        geometric_consistency
+    )
+
+    # --------------------------------------------------------
+    # VISUALIZATION
+    # --------------------------------------------------------
+
+    visualization = create_correspondence_visualization(
+        image_a,
+        image_b,
+        points_a,
+        points_b,
+        geometry_mask
+    )
+
+    # --------------------------------------------------------
+    # TIME
+    # --------------------------------------------------------
+
+    processing_time = (
+        time.time() - start_time
+    )
+
+    return {
+        "score": score,
+        "confidence": round(
+            mean_confidence * 100.0,
+            2
+        ),
+        "decision": decision,
+
+        "candidate_matches": candidate_matches,
+        "verified_matches": verified_matches,
+
+        "sift_candidates": sift[
+            "candidates"
+        ],
+
+        "sift_verified": sift[
+            "verified"
+        ],
+
+        "sift_support": sift_support,
+
+        "inlier_ratio": inlier_ratio,
+
+        "geometric_consistency":
+            geometric_consistency,
+
+        "spatial_coverage":
+            round(
+                spatial_coverage,
+                2
+            ),
+
+        "reprojection_error":
+            reprojection_error,
+
+        "model": model,
+
+        "quality_a": quality_a,
+        "quality_b": quality_b,
+
+        "visualization": visualization,
+
+        "interpretation": interpretation,
+
+        "pipeline": pipeline_state(),
+
+        "processing_time":
+            round(
+                processing_time,
+                2
+            )
+    }
+
+
+# ============================================================
+# API: MATCH
+# ============================================================
+
+@app.route(
+    "/api/match",
+    methods=["POST"]
+)
+def match_api():
+
+    try:
+
+        # ----------------------------------------------------
+        # FILE A
+        # ----------------------------------------------------
+
+        file_a = (
+            request.files.get("imageA")
+            or request.files.get("image1")
+            or request.files.get("fileA")
+        )
+
+        # ----------------------------------------------------
+        # FILE B
+        # ----------------------------------------------------
+
+        file_b = (
+            request.files.get("imageB")
+            or request.files.get("image2")
+            or request.files.get("fileB")
+        )
+
+        if file_a is None or file_b is None:
+
+            return jsonify({
+                "success": False,
+                "error": "Both Image A and Image B are required."
+            }), 400
+
+        if not allowed_file(file_a.filename):
+
+            return jsonify({
+                "success": False,
+                "error": "Unsupported format for Image A."
+            }), 400
+
+        if not allowed_file(file_b.filename):
+
+            return jsonify({
+                "success": False,
+                "error": "Unsupported format for Image B."
+            }), 400
+
+        # ----------------------------------------------------
+        # READ FILES
+        # ----------------------------------------------------
+
+        bytes_a = file_a.read()
+        bytes_b = file_b.read()
+
+        if not bytes_a or not bytes_b:
+
+            return jsonify({
+                "success": False,
+                "error": "One or both uploaded files are empty."
+            }), 400
+
+        array_a = np.frombuffer(
+            bytes_a,
+            dtype=np.uint8
+        )
+
+        array_b = np.frombuffer(
+            bytes_b,
+            dtype=np.uint8
+        )
+
+        image_a = cv2.imdecode(
+            array_a,
+            cv2.IMREAD_COLOR
+        )
+
+        image_b = cv2.imdecode(
+            array_b,
+            cv2.IMREAD_COLOR
+        )
+
+        if image_a is None or image_b is None:
+
+            return jsonify({
+                "success": False,
+                "error": "Unable to decode one or both images."
+            }), 400
+
+        # ----------------------------------------------------
+        # PROCESS
+        # ----------------------------------------------------
+
+        result = perform_match(
+            image_a,
+            image_b
+        )
+
+        # ----------------------------------------------------
+        # RESPONSE
+        # ----------------------------------------------------
+
+        response = {
+            "success": True,
+
+            "version": "5.3",
+            "engine": (
+                "Hybrid Learned + Classical "
+                "Lunar Correspondence Engine"
+            ),
+
+            "device": DEVICE,
+
+            "loftr": LOFTR_STATUS,
+
+            "score": result["score"],
+
+            "confidence": result[
+                "confidence"
+            ],
+
+            "decision": result[
+                "decision"
+            ],
+
+            "candidate_matches":
+                result[
+                    "candidate_matches"
+                ],
+
+            "verified_matches":
+                result[
+                    "verified_matches"
+                ],
+
+            "sift_candidates":
+                result[
+                    "sift_candidates"
+                ],
+
+            "sift_verified":
+                result[
+                    "sift_verified"
+                ],
+
+            "sift_support":
+                result[
+                    "sift_support"
+                ],
+
+            "inlier_ratio":
+                result[
+                    "inlier_ratio"
+                ],
+
+            "geometric_consistency":
+                result[
+                    "geometric_consistency"
+                ],
+
+            "spatial_coverage":
+                result[
+                    "spatial_coverage"
+                ],
+
+            "reprojection_error":
+                result[
+                    "reprojection_error"
+                ],
+
+            "model":
+                result[
+                    "model"
+                ],
+
+            "quality_a":
+                result[
+                    "quality_a"
+                ],
+
+            "quality_b":
+                result[
+                    "quality_b"
+                ],
+
+            "visualization":
+                result[
+                    "visualization"
+                ],
+
+            "interpretation":
+                result[
+                    "interpretation"
+                ],
+
+            "pipeline":
+                result[
+                    "pipeline"
+                ],
+
+            "processing_time":
+                result[
+                    "processing_time"
+                ]
+        }
+
+        # ----------------------------------------------------
+        # MEMORY CLEANUP
+        # ----------------------------------------------------
+
+        del bytes_a
+        del bytes_b
+        del array_a
+        del array_b
+        del image_a
+        del image_b
+
+        gc.collect()
+
+        return jsonify(response)
+
+    except Exception as e:
+
+        print("MATCH API ERROR")
+        traceback.print_exc()
+
+        gc.collect()
+
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "type": type(e).__name__
+        }), 500
+
+
+# ============================================================
+# API: REPORT
+# ============================================================
+
+@app.route(
+    "/api/report",
+    methods=["POST"]
+)
+def report_api():
+
+    try:
+
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.utils import ImageReader
 
         file_a = (
             request.files.get("imageA")
@@ -836,348 +1609,437 @@ def match():
             or request.files.get("fileB")
         )
 
-        if not file_a or not file_b:
+        if file_a is None or file_b is None:
+
             return jsonify({
-                "error": True,
-                "message": "Both lunar images are required."
+                "success": False,
+                "error": "Both images are required."
             }), 400
 
-        if not allowed_file(file_a.filename):
-            return jsonify({
-                "error": True,
-                "message": "Unsupported format for Image A."
-            }), 400
+        bytes_a = file_a.read()
+        bytes_b = file_b.read()
 
-        if not allowed_file(file_b.filename):
-            return jsonify({
-                "error": True,
-                "message": "Unsupported format for Image B."
-            }), 400
-
-        data_a = np.frombuffer(
-            file_a.read(),
-            np.uint8
+        array_a = np.frombuffer(
+            bytes_a,
+            dtype=np.uint8
         )
 
-        data_b = np.frombuffer(
-            file_b.read(),
-            np.uint8
+        array_b = np.frombuffer(
+            bytes_b,
+            dtype=np.uint8
         )
 
         image_a = cv2.imdecode(
-            data_a,
+            array_a,
             cv2.IMREAD_COLOR
         )
 
         image_b = cv2.imdecode(
-            data_b,
+            array_b,
             cv2.IMREAD_COLOR
         )
 
         if image_a is None or image_b is None:
-            raise ValueError(
-                "One or both images could not be decoded."
+
+            return jsonify({
+                "success": False,
+                "error": "Unable to decode uploaded images."
+            }), 400
+
+        result = perform_match(
+            image_a,
+            image_b
+        )
+
+        report_id = str(
+            uuid.uuid4()
+        )
+
+        pdf_filename = (
+            "LUNARMATCH_Report_" +
+            report_id +
+            ".pdf"
+        )
+
+        pdf_path = os.path.join(
+            RESULT_DIR,
+            pdf_filename
+        )
+
+        pdf = canvas.Canvas(
+            pdf_path,
+            pagesize=A4
+        )
+
+        page_width, page_height = A4
+
+        # ----------------------------------------------------
+        # HEADER
+        # ----------------------------------------------------
+
+        pdf.setFont(
+            "Helvetica-Bold",
+            22
+        )
+
+        pdf.drawString(
+            50,
+            page_height - 60,
+            "LUNARMATCH"
+        )
+
+        pdf.setFont(
+            "Helvetica",
+            10
+        )
+
+        pdf.drawString(
+            50,
+            page_height - 80,
+            "Lunar Image Correspondence Analysis"
+        )
+
+        # ----------------------------------------------------
+        # SUMMARY
+        # ----------------------------------------------------
+
+        y = page_height - 125
+
+        pdf.setFont(
+            "Helvetica-Bold",
+            13
+        )
+
+        pdf.drawString(
+            50,
+            y,
+            "Analysis Summary"
+        )
+
+        y -= 28
+
+        pdf.setFont(
+            "Helvetica",
+            10
+        )
+
+        summary = [
+            f"Match Score: {result['score']}/100",
+            f"Confidence: {result['confidence']}%",
+            f"Decision: {result['decision']}",
+            f"Candidate Matches: {result['candidate_matches']}",
+            f"Verified Matches: {result['verified_matches']}",
+            f"Geometric Consistency: {result['geometric_consistency']}%",
+            f"Spatial Coverage: {result['spatial_coverage']}%",
+            f"Inlier Ratio: {result['inlier_ratio']}%",
+            f"Model: {result['model']}",
+            f"Processing Time: {result['processing_time']} seconds"
+        ]
+
+        for line in summary:
+
+            pdf.drawString(
+                60,
+                y,
+                line
             )
 
-        image_a = resize_for_processing(image_a)
-        image_b = resize_for_processing(image_b)
+            y -= 18
 
-        gray_a = normalize_image(image_a)
-        gray_b = normalize_image(image_b)
+        # ----------------------------------------------------
+        # INTERPRETATION
+        # ----------------------------------------------------
 
-        quality_a = calculate_image_quality(gray_a)
-        quality_b = calculate_image_quality(gray_b)
+        y -= 10
 
-        # Learned correspondence
-        k0, k1, confidence = run_loftr(
-            gray_a,
-            gray_b
+        pdf.setFont(
+            "Helvetica-Bold",
+            13
         )
 
-        candidates = len(k0)
-
-        mean_confidence = (
-            float(np.mean(confidence))
-            if candidates
-            else 0.0
+        pdf.drawString(
+            50,
+            y,
+            "Interpretation"
         )
 
-        geometry_result = verify_geometry(
-            np.asarray(k0),
-            np.asarray(k1)
+        y -= 22
+
+        pdf.setFont(
+            "Helvetica",
+            9
         )
 
-        verified = geometry_result["verified"]
-        inlier_ratio = geometry_result["inlier_ratio"]
-        reprojection_error = geometry_result["reprojection_error"]
-        model = geometry_result["model"]
-        mask = geometry_result["mask"]
+        text = result[
+            "interpretation"
+        ]
 
-        h, w = gray_a.shape
+        # Basic wrapping
+        words = text.split()
+        line = ""
 
-        spatial = calculate_spatial_coverage(
-            np.asarray(k0)[mask]
-            if candidates and mask.any()
-            else np.empty((0, 2)),
-            w,
-            h
+        for word in words:
+
+            test = (
+                line + " " + word
+            ).strip()
+
+            if pdf.stringWidth(
+                test,
+                "Helvetica",
+                9
+            ) > 480:
+
+                pdf.drawString(
+                    60,
+                    y,
+                    line
+                )
+
+                y -= 14
+                line = word
+
+            else:
+
+                line = test
+
+        if line:
+
+            pdf.drawString(
+                60,
+                y,
+                line
+            )
+
+        y -= 35
+
+        # ----------------------------------------------------
+        # CORRESPONDENCE IMAGE
+        # ----------------------------------------------------
+
+        visualization = result[
+            "visualization"
+        ]
+
+        if visualization:
+
+            visualization_filename = (
+                visualization
+                .replace(
+                    "/results/",
+                    ""
+                )
+            )
+
+            visualization_path = os.path.join(
+                RESULT_DIR,
+                visualization_filename
+            )
+
+            if os.path.exists(
+                visualization_path
+            ):
+
+                pdf.setFont(
+                    "Helvetica-Bold",
+                    13
+                )
+
+                pdf.drawString(
+                    50,
+                    y,
+                    "Correspondence Map"
+                )
+
+                y -= 20
+
+                try:
+
+                    img = cv2.imread(
+                        visualization_path
+                    )
+
+                    if img is not None:
+
+                        h, w = img.shape[:2]
+
+                        max_w = 500
+                        max_h = 280
+
+                        scale = min(
+                            max_w / w,
+                            max_h / h
+                        )
+
+                        draw_w = w * scale
+                        draw_h = h * scale
+
+                        pdf.drawImage(
+                            ImageReader(
+                                visualization_path
+                            ),
+                            50,
+                            max(
+                                50,
+                                y - draw_h
+                            ),
+                            width=draw_w,
+                            height=draw_h,
+                            preserveAspectRatio=True,
+                            mask="auto"
+                        )
+
+                except Exception:
+                    pass
+
+        # ----------------------------------------------------
+        # FOOTER
+        # ----------------------------------------------------
+
+        pdf.setFont(
+            "Helvetica",
+            8
         )
 
-        # Classical supporting branch
-        sift_candidates, sift_verified, sift_support = run_sift(
-            gray_a,
-            gray_b
+        pdf.drawString(
+            50,
+            30,
+            "Generated by LUNARMATCH V5.3"
         )
 
-        overall_quality = (
-            quality_a["quality_score"] +
-            quality_b["quality_score"]
-        ) / 2.0
+        pdf.save()
 
-        final_score, geometric_consistency = calculate_scores(
-            candidates,
-            verified,
-            mean_confidence,
-            inlier_ratio,
-            spatial,
-            reprojection_error,
-            sift_support,
-            overall_quality
+        # ----------------------------------------------------
+        # RESPONSE
+        # ----------------------------------------------------
+
+        return send_from_directory(
+            RESULT_DIR,
+            pdf_filename,
+            as_attachment=True,
+            download_name=(
+                "LUNARMATCH_Analysis_Report.pdf"
+            )
         )
-
-        confidence_level, decision = classify_result(
-            final_score,
-            verified,
-            geometric_consistency,
-            spatial
-        )
-
-        visualization = create_visualization(
-            image_a,
-            image_b,
-            np.asarray(k0),
-            np.asarray(k1),
-            mask,
-            model
-        )
-
-        interpretation = build_interpretation(
-            final_score,
-            confidence_level,
-            candidates,
-            verified,
-            geometric_consistency,
-            model
-        )
-
-        elapsed = round(
-            time.time() - start,
-            2
-        )
-
-        return jsonify({
-
-            "success": True,
-
-            "version": "5.3",
-
-            "engine":
-                "Hybrid LoFTR + Multi-view SIFT",
-
-            "visualization_engine":
-                "Hybrid LoFTR + Multi-view SIFT",
-
-            "device": DEVICE,
-
-            "match_percentage":
-                round(final_score, 1),
-
-            "evidence_score":
-                round(final_score, 1),
-
-            "confidence":
-                confidence_level,
-
-            "decision":
-                decision,
-
-            "candidate_matches":
-                candidates,
-
-            "loftr_candidate_matches":
-                candidates,
-
-            "verified_matches":
-                verified,
-
-            "loftr_verified_matches":
-                verified,
-
-            "sift_candidate_matches":
-                sift_candidates,
-
-            "sift_verified_matches":
-                sift_verified,
-
-            "sift_support_score":
-                round(sift_support, 1),
-
-            "learned_score":
-                round(final_score, 1),
-
-            "inlier_ratio":
-                round(inlier_ratio, 1),
-
-            "geometric_consistency":
-                round(geometric_consistency, 1),
-
-            "spatial_coverage":
-                round(spatial, 1),
-
-            "reprojection_error":
-                (
-                    round(reprojection_error, 2)
-                    if reprojection_error is not None
-                    else None
-                ),
-
-            "geometry_model":
-                model,
-
-            "image_quality_a":
-                quality_a,
-
-            "image_quality_b":
-                quality_b,
-
-            "feature_count_a":
-                max(
-                    sift_candidates,
-                    candidates
-                ),
-
-            "feature_count_b":
-                max(
-                    sift_candidates,
-                    candidates
-                ),
-
-            "visualization":
-                visualization,
-
-            "interpretation":
-                interpretation,
-
-            "pipeline": [
-                {
-                    "step": 1,
-                    "name": "ACQUIRE",
-                    "detail": "Lunar image input"
-                },
-                {
-                    "step": 2,
-                    "name": "NORMALIZE",
-                    "detail": "Grayscale + contrast normalization"
-                },
-                {
-                    "step": 3,
-                    "name": "LEARNED MATCH",
-                    "detail": "LoFTR correspondence extraction"
-                },
-                {
-                    "step": 4,
-                    "name": "GEOMETRIC VERIFY",
-                    "detail": "Affine / Homography + RANSAC"
-                },
-                {
-                    "step": 5,
-                    "name": "CROSS-CHECK",
-                    "detail": "Multi-view SIFT support"
-                },
-                {
-                    "step": 6,
-                    "name": "EVIDENCE FUSION",
-                    "detail": "Multi-signal correspondence scoring"
-                },
-                {
-                    "step": 7,
-                    "name": "REPORT",
-                    "detail": "Metrics + visualization"
-                }
-            ],
-
-            "processing_time":
-                elapsed,
-
-            "process_time":
-                elapsed
-
-        })
 
     except Exception as e:
 
-        print("\nLUNARMATCH ERROR")
-        print(traceback.format_exc())
+        print("REPORT API ERROR")
+        traceback.print_exc()
+
+        gc.collect()
 
         return jsonify({
-            "error": True,
-            "message": str(e)
+            "success": False,
+            "error": str(e)
         }), 500
 
 
-# ------------------------------------------------------------
-# ROUTES
-# ------------------------------------------------------------
+# ============================================================
+# RESULT FILES
+# ============================================================
 
-@app.route("/")
-def home():
-    return send_from_directory(
-        BASE_DIR,
-        "index.html"
-    )
+@app.route(
+    "/results/<path:filename>"
+)
+def result_file(filename):
 
-
-@app.route("/results/<path:filename>")
-def results(filename):
     return send_from_directory(
         RESULT_DIR,
         filename
     )
 
 
-@app.route("/health")
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
+@app.route(
+    "/health"
+)
 def health():
 
     return jsonify({
-        "status": "online",
-        "engine":
-            "Hybrid LoFTR + Multi-view SIFT",
+        "status": "ok",
+        "service": "LUNARMATCH",
         "version": "5.3",
+        "engine": (
+            "Hybrid Learned + Classical "
+            "Lunar Correspondence Engine"
+        ),
         "device": DEVICE,
-        "loftr":
-            "READY" if LOFTR is not None else "UNAVAILABLE"
+        "loftr": LOFTR_STATUS
     })
 
 
+# ============================================================
+# FRONTEND
+# ============================================================
+
+@app.route("/")
+def index():
+
+    return send_from_directory(
+        BASE_DIR,
+        "index.html"
+    )
+
+
+# ============================================================
+# ERROR HANDLERS
+# ============================================================
+
+@app.errorhandler(
+    413
+)
+def file_too_large(error):
+
+    return jsonify({
+        "success": False,
+        "error": "Uploaded file is too large."
+    }), 413
+
+
+@app.errorhandler(
+    500
+)
+def internal_error(error):
+
+    return jsonify({
+        "success": False,
+        "error": "Internal server error."
+    }), 500
+
+
+# ============================================================
+# LOCAL DEVELOPMENT
+# ============================================================
+
 if __name__ == "__main__":
 
-    print()
-    print("=" * 65)
-    print("LUNARMATCH SERVER")
-    print("=" * 65)
-    print("Engine  : Hybrid LoFTR + Multi-view SIFT")
-    print("Version : 5.3")
-    print("Device  :", DEVICE)
-    print(
-        "LoFTR   :",
-        "READY" if LOFTR is not None else "UNAVAILABLE"
+    port = int(
+        os.environ.get(
+            "PORT",
+            5000
+        )
     )
-    print("URL     : http://127.0.0.1:5000")
-    print("=" * 65)
+
+    print(
+        "Starting LUNARMATCH V5.3..."
+    )
+
+    print(
+        "Device:",
+        DEVICE
+    )
+
+    print(
+        "LoFTR:",
+        LOFTR_STATUS
+    )
 
     app.run(
-        host="127.0.0.1",
-        port=5000,
+        host="0.0.0.0",
+        port=port,
         debug=False
     )
-    
