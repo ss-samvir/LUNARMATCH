@@ -1,10 +1,3 @@
 Flask>=3.0,<4
-Werkzeug
-opencv-python-headless>=4.8
-numpy>=1.24
-reportlab
-gunicorn
-Flask-SQLAlchemy
-psycopg2-binary
-torch
-kornia
+Werkzeug>=3.0,<4
+gunicorn>=21,<24
