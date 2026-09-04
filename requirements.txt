@@ -6,3 +6,5 @@ reportlab
 gunicorn
 Flask-SQLAlchemy
 psycopg2-binary
+torch
+kornia
