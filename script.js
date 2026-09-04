@@ -35,9 +35,11 @@ let lastAnalysis = null;
 // =========================================================
 
 function setText(id, value) {
+
     const element = document.getElementById(id);
 
     if (element) {
+
         element.textContent =
             value === undefined ||
             value === null ||
@@ -257,23 +259,29 @@ setupImageInput(
 
 function resetResults() {
 
-    statusEl.textContent =
-        "READY FOR ANALYSIS";
+    if (statusEl)
+        statusEl.textContent =
+            "READY FOR ANALYSIS";
 
-    scoreEl.textContent =
-        "—";
+    if (scoreEl)
+        scoreEl.textContent =
+            "—";
 
-    featuresEl.textContent =
-        "—";
+    if (featuresEl)
+        featuresEl.textContent =
+            "—";
 
-    confidenceEl.textContent =
-        "—";
+    if (confidenceEl)
+        confidenceEl.textContent =
+            "—";
 
-    qualityEl.textContent =
-        "—";
+    if (qualityEl)
+        qualityEl.textContent =
+            "—";
 
-    timeEl.textContent =
-        "—";
+    if (timeEl)
+        timeEl.textContent =
+            "—";
 
 
     const ids = [
@@ -623,12 +631,14 @@ function generateInterpretation(
         );
 
     const confidence =
-        data.confidence ||
-        "Unclassified";
+        typeof data.confidence === "string"
+            ? data.confidence
+            : "Unclassified";
 
     const quality =
-        data.quality ||
-        "Unknown";
+        typeof data.quality === "string"
+            ? data.quality
+            : "Unknown";
 
 
     let assessment;
@@ -714,10 +724,6 @@ function displayResults(
         data;
 
 
-    // -----------------------------------------------------
-    // MAIN SUMMARY
-    // -----------------------------------------------------
-
     const matchFound =
         Boolean(data.match_found);
 
@@ -780,10 +786,6 @@ function displayResults(
             : "—";
 
 
-    // -----------------------------------------------------
-    // IMAGE A
-    // -----------------------------------------------------
-
     displayImageQuality(
         data.image_quality_a,
         "A"
@@ -798,10 +800,6 @@ function displayResults(
     );
 
 
-    // -----------------------------------------------------
-    // IMAGE B
-    // -----------------------------------------------------
-
     displayImageQuality(
         data.image_quality_b,
         "B"
@@ -815,10 +813,6 @@ function displayResults(
         )
     );
 
-
-    // -----------------------------------------------------
-    // MATCHING
-    // -----------------------------------------------------
 
     setText(
         "rawMatches",
@@ -843,8 +837,6 @@ function displayResults(
         )
     );
 
-
-    // Feature coverage
 
     let coverage =
         data.feature_coverage;
@@ -885,8 +877,6 @@ function displayResults(
     );
 
 
-    // Correspondence strength
-
     const correspondenceStrength =
         data.correspondence_strength ??
         data.match_percentage;
@@ -899,10 +889,6 @@ function displayResults(
         )
     );
 
-
-    // -----------------------------------------------------
-    // GEOMETRIC ANALYSIS
-    // -----------------------------------------------------
 
     const inlierRatio =
         data.inlier_ratio ??
@@ -940,10 +926,6 @@ function displayResults(
             : "NO VERIFIED CORRESPONDENCES"
     );
 
-
-    // -----------------------------------------------------
-    // VISUALIZATION
-    // -----------------------------------------------------
 
     if (
         data.visualization &&
@@ -992,10 +974,6 @@ function displayResults(
     }
 
 
-    // -----------------------------------------------------
-    // ENGINE LABEL
-    // -----------------------------------------------------
-
     const visualEngine =
         document.getElementById(
             "visualEngine"
@@ -1009,25 +987,13 @@ function displayResults(
     }
 
 
-    // -----------------------------------------------------
-    // INTERPRETATION
-    // -----------------------------------------------------
-
     generateInterpretation(
         data
     );
 
 
-    // -----------------------------------------------------
-    // PIPELINE
-    // -----------------------------------------------------
-
     setPipelineComplete();
 
-
-    // -----------------------------------------------------
-    // ENABLE REPORT
-    // -----------------------------------------------------
 
     if (downloadReportBtn) {
 
@@ -1135,18 +1101,23 @@ async function compareImages() {
     setPipelineRunning();
 
 
+    // =====================================================
+    // IMPORTANT:
+    // Backend expects imageA and imageB
+    // =====================================================
+
     const formData =
         new FormData();
 
 
     formData.append(
-        "image1",
+        "imageA",
         imageA
     );
 
 
     formData.append(
-        "image2",
+        "imageB",
         imageB
     );
 
@@ -1346,14 +1317,19 @@ async function downloadReport() {
         new FormData();
 
 
+    // =====================================================
+    // IMPORTANT:
+    // Backend expects imageA and imageB
+    // =====================================================
+
     formData.append(
-        "image1",
+        "imageA",
         imageA
     );
 
 
     formData.append(
-        "image2",
+        "imageB",
         imageB
     );
 
