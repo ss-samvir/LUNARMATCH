@@ -21,7 +21,7 @@
     let pdfReadyPromise = null;
 
     const MAX_IMAGE_DIMENSION = 1100;
-    const ORB_FEATURES = 4000;
+    const ORB_FEATURES = 1200;
     const LOWE_RATIO = 0.78;
     const MAX_VISUAL_MATCHES = 80;
 
